@@ -44,7 +44,7 @@ Paste a site (or import a list), press **Check**, and see whether the website op
 
 ### Recommended install
 
-1. Get **`WebsiteHealthManager-Setup-0.1.0.exe`** (or build it with the steps at the bottom of this page).
+1. Download **[WebsiteHealthManager-Setup-0.1.0.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.0/WebsiteHealthManager-Setup-0.1.0.exe)** from the [v0.1.0 release](https://github.com/Pieter1821/Website-Health-Manager/releases/tag/v0.1.0).
 2. Double-click the setup → **Next** → **Install**.
 3. Open **Website Health Manager** from the Start menu or desktop shortcut.
 4. Chrome opens the WHM window.
@@ -52,6 +52,8 @@ Paste a site (or import a list), press **Check**, and see whether the website op
 6. Click a row → **Problems & fixes**. Export with **Excel** / **CSV**, or **Export all** for every site (saved to Downloads).
 
 No Python is required. Your data stays on this PC under `%USERPROFILE%\.whm\`.
+
+Windows may show SmartScreen for an unsigned build — choose **More info** → **Run anyway**.
 
 ### First-time walkthrough
 
