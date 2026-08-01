@@ -21,7 +21,7 @@ from whm.domain.models import (
     RiskLevel,
 )
 from whm.presentation.webapi import AppContext, _expiry_bits, make_handler
-from tests.conftest import dns_with_records, healthy_check
+from tests.helpers import dns_with_records, healthy_check
 
 
 @pytest.fixture

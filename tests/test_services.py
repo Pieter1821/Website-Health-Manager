@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from whm.domain.models import DnsRecord, HealthStatus
-from tests.conftest import dns_with_records, healthy_check
+from tests.helpers import dns_with_records, healthy_check
 
 
 def test_add_customer_empty_raises(website_service):
