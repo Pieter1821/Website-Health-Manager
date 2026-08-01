@@ -299,7 +299,7 @@ def test_days_to_status_boundaries_no_false_critical():
 
 
 def test_https_url_does_not_become_literal_https_domain():
-    assert extract_domain("https://www.asha.co.za/path") == "www.asha.co.za"
+    assert extract_domain("https://www.example.com/path") == "www.example.com"
     with pytest.raises(ValueError):
         extract_domain("https://")
     with pytest.raises(ValueError):

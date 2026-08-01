@@ -29,25 +29,25 @@ def test_parse_client_website_and_url_headers():
     """Match the user's spreadsheet: Client Website + URL (+ ignored extras)."""
     data = (
         b"Client Website,URL,Notes,Owner\n"
-        b"ASHA Finance,https://www.asha.co.za,ignore me,Team A\n"
-        b"LendGo Finance,https://www.lendgofinance.co.za,also ignore,Team B\n"
+        b"Demo Shop,https://demo-shop.example,ignore me,Team A\n"
+        b"Northwind Mail,https://northwind.example,also ignore,Team B\n"
     )
     rows = parse_csv_bytes(data)
     assert len(rows) == 2
-    assert rows[0].customer == "ASHA Finance"
-    assert rows[0].display_name == "ASHA Finance"
-    assert rows[0].url == "https://www.asha.co.za"
-    assert rows[1].customer == "LendGo Finance"
-    assert rows[1].url == "https://www.lendgofinance.co.za"
+    assert rows[0].customer == "Demo Shop"
+    assert rows[0].display_name == "Demo Shop"
+    assert rows[0].url == "https://demo-shop.example"
+    assert rows[1].customer == "Northwind Mail"
+    assert rows[1].url == "https://northwind.example"
 
 
 def test_example_test_clients_file_only_captures_client_and_url():
     path = EXAMPLES / "test-clients-import.csv"
     rows = parse_import_file(path.name, path.read_bytes())
-    assert len(rows) == 7
-    assert rows[0].customer == "ASHA Finance"
-    assert rows[0].url == "https://www.asha.co.za"
-    assert rows[1].customer == "LendGo Finance"
+    assert len(rows) == 6
+    assert rows[0].customer == "Demo Shop"
+    assert rows[0].url == "https://demo-shop.example"
+    assert rows[1].customer == "Northwind Mail"
     assert all(r.url.startswith("http") for r in rows)
     # Extra columns (Notes/Owner/Priority) must not become URLs or customers.
     assert all("Team" not in r.url for r in rows)
@@ -70,8 +70,8 @@ def test_parse_xlsx_client_website_structure(tmp_path):
   <si><t>Client Website</t></si>
   <si><t>URL</t></si>
   <si><t>Notes</t></si>
-  <si><t>ASHA Finance</t></si>
-  <si><t>https://www.asha.co.za</t></si>
+  <si><t>Demo Shop</t></si>
+  <si><t>https://demo-shop.example</t></si>
   <si><t>should be ignored</t></si>
 </sst>
 """
@@ -105,9 +105,9 @@ def test_parse_xlsx_client_website_structure(tmp_path):
 
     rows = parse_xlsx_bytes(xlsx.read_bytes())
     assert len(rows) == 1
-    assert rows[0].customer == "ASHA Finance"
-    assert rows[0].url == "https://www.asha.co.za"
-    assert rows[0].display_name == "ASHA Finance"
+    assert rows[0].customer == "Demo Shop"
+    assert rows[0].url == "https://demo-shop.example"
+    assert rows[0].display_name == "Demo Shop"
 
 
 def test_parse_xlsx_roundtrip(tmp_path):
@@ -206,8 +206,8 @@ def test_apply_import_client_website_sheet_creates_customers():
         .split("/")[0],
     )
     assert result.errors == []
-    assert len(result.added) == 7
-    assert "ASHA Finance" in customers
-    assert "LendGo Finance" in customers
-    assert websites[0]["display_name"] == "ASHA Finance"
-    assert websites[0]["url"] == "https://www.asha.co.za"
+    assert len(result.added) == 6
+    assert "Demo Shop" in customers
+    assert "Northwind Mail" in customers
+    assert websites[0]["display_name"] == "Demo Shop"
+    assert websites[0]["url"] == "https://demo-shop.example"

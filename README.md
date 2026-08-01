@@ -100,7 +100,7 @@ Only these columns are used (others ignored):
 
 ```csv
 Client Website,URL
-ASHA Finance,https://www.asha.co.za
+Demo Shop,https://demo-shop.example
 ```
 
 Sample list: `examples/test-clients-import.csv`  
