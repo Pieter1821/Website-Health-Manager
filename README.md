@@ -1,6 +1,14 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="Website Health Manager — Monitor · Detect · Protect" width="420" />
+</p>
+
 # Website Health Manager (WHM)
 
 Desktop tool for agencies and IT support: paste a customer website, press **Check**, and see why the site, domain, certificate, DNS, or email (especially SendGrid) is broken — in plain language.
+
+<p align="center">
+  <img src="docs/assets/screenshot.jpg" alt="Website Health Manager app — websites table with plain-language status badges" width="900" />
+</p>
 
 ## Get started (manual)
 
