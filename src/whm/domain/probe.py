@@ -13,21 +13,29 @@ _PROBE_PATTERNS = (
     r"name or service not known",
     r"temporary failure in name resolution",
     r"nodename nor servname provided",
+    r"no address associated with hostname",
+    r"failed to resolve",
+    r"name resolution",
     r"dns operation timed out",
     r"the resolution lifetime expired",
+    r"all connection attempts failed",  # httpx wraps many local failures this way
+    r"connect call failed",
     r"timed out",
     r"timeout",
     r"network is unreachable",
     r"no route to host",
+    r"network unreachable",
     r"connection aborted",
     r"connection reset",
     r"forcibly closed",
     r"unreachable",
     r"10054",  # WinError connection reset
     r"10051",  # network unreachable
+    r"10053",  # connection aborted
     r"10060",  # connection timed out
     r"11001",  # WSAHOST_NOT_FOUND
     r"11002",  # WSATRY_AGAIN
+    r"11004",  # WSANO_DATA
 )
 
 

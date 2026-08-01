@@ -50,6 +50,7 @@ def check_website(url: str, timeout: float = 10.0) -> dict[str, Any]:
     final_url = target
     status_code: int | None = None
     error: str | None = None
+    probe_like = False
     https_used = target.lower().startswith("https://")
 
     try:
@@ -110,8 +111,11 @@ def check_website(url: str, timeout: float = 10.0) -> dict[str, Any]:
                 )
     except httpx.TimeoutException:
         error = f"Request timed out after {timeout}s"
+        probe_like = True
     except httpx.ConnectError as exc:
+        # Connect never completed — usually local DNS/Wi‑Fi, not a proven site outage.
         error = f"Connection failed: {exc}"
+        probe_like = True
     except httpx.HTTPError as exc:
         error = f"HTTP error: {exc}"
     except Exception as exc:  # noqa: BLE001 — surface unexpected network issues
@@ -120,7 +124,7 @@ def check_website(url: str, timeout: float = 10.0) -> dict[str, Any]:
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     if error:
-        if is_probe_failure(error):
+        if probe_like or is_probe_failure(error):
             findings.append(
                 probe_failed_finding(
                     "website",
