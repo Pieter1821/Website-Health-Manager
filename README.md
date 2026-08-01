@@ -68,22 +68,25 @@ pytest -q
 Best path for non-technical users: ship one Windows executable built with **PyInstaller**.
 
 ```powershell
+cd C:\Users\Pieter\Website-Health-Manager
+.\.venv\Scripts\Activate.ps1
 pip install pyinstaller
 pyinstaller --noconfirm packaging/whm.spec
 ```
 
-Output: `dist\WebsiteHealthManager.exe`
+Output (smoke-tested): `dist\WebsiteHealthManager.exe` (~21 MB)
 
-- Double-click runs the same Chrome app UI + local API.
+- Double-click runs Chrome app mode + local API at `http://127.0.0.1:17865/`.
 - No Python install required on the target PC.
 - Still needs internet for live checks (DNS/HTTP/WHOIS).
 - First-run data still goes to `%USERPROFILE%\.whm\`.
+- Copy only that `.exe` to a shared folder or USB for support staff.
 
 **Why not a website in the cloud?** This tool probes customer domains and email DNS from *your* network and keeps results local. A public SaaS would need auth, multi-tenant storage, and outbound scan workers — useful later, heavier now.
 
 **Why not Microsoft Store / MSIX yet?** Fine later for distribution polish; PyInstaller `.exe` (or an Inno Setup installer wrapping it) is the fastest way to get this onto support desks.
 
-Optional packaging next steps: code-signing the exe, Inno Setup installer, auto-update.
+Optional next packaging steps: code-signing the exe, Inno Setup installer, auto-update.
 
 ## License
 
