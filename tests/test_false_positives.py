@@ -1,5 +1,5 @@
 """
-Guard against false “Something's wrong” results.
+Guard against false “Needs a fix” results from local probe noise.
 
 Network/Wi‑Fi/DNS probe failures must stay UNKNOWN / inconclusive.
 Real customer issues (expired cert text, NXDOMAIN, missing SPF) must still surface.
@@ -104,6 +104,20 @@ def test_http_503_is_real_problem():
         result = check_website("https://example.com", timeout=1)
     assert result["status"] == HealthStatus.CRITICAL
     assert result["findings"][0].status == FindingStatus.INCORRECT
+
+
+def test_http_403_is_not_a_problem():
+    response = MagicMock()
+    response.status_code = 403
+    response.is_redirect = False
+    response.url = "https://example.com/"
+    response.headers = {}
+    with patch("whm.infrastructure.http_checker.httpx.Client") as client_cls:
+        client = client_cls.return_value.__enter__.return_value
+        client.request.return_value = response
+        result = check_website("https://example.com", timeout=1)
+    assert result["status"] == HealthStatus.HEALTHY
+    assert all(f.status != FindingStatus.INCORRECT for f in result["findings"])
 
 
 def test_http_200_is_healthy():
@@ -279,11 +293,17 @@ def test_aggregate_probe_noise_alone_is_unknown():
     assert aggregate_status(only_probe) == HealthStatus.UNKNOWN
 
 
-def test_real_spf_missing_still_critical_with_probe_noise():
+def test_spf_missing_is_warning_not_critical():
+    """Mail often still works without SPF — do not scare staff with red."""
     findings = [
         probe_failed_finding("website", "web", "timeout"),
         Finding("spf", "SPF missing", FindingStatus.MISSING, "none"),
     ]
+    assert aggregate_status(findings) == HealthStatus.WARNING
+
+
+def test_mx_missing_is_still_critical():
+    findings = [Finding("mx", "MX missing", FindingStatus.MISSING, "none")]
     assert aggregate_status(findings) == HealthStatus.CRITICAL
 
 
@@ -309,7 +329,7 @@ def test_https_url_does_not_become_literal_https_domain():
 # --- UI serialization must not invent problems ---------------------------
 
 
-def test_serialize_hides_security_and_keeps_real_email_issue():
+def test_serialize_hides_security_and_email_noise():
     site = Website(
         id=1,
         url="https://example.com",
@@ -321,7 +341,7 @@ def test_serialize_hides_security_and_keeps_real_email_issue():
         overall_status=HealthStatus.CRITICAL,
         risk_level=RiskLevel.HIGH,
         website_status=HealthStatus.HEALTHY,
-        ssl_status=HealthStatus.HEALTHY,
+        ssl_status=HealthStatus.WARNING,
         domain_status=HealthStatus.UNKNOWN,
         dns_status=HealthStatus.HEALTHY,
         email_status=HealthStatus.CRITICAL,
@@ -335,6 +355,13 @@ def test_serialize_hides_security_and_keeps_real_email_issue():
                 "Add SPF",
             ),
             Finding("ssl", "Hostname match", FindingStatus.CORRECT, "ok"),
+            Finding(
+                "ssl",
+                "Certificate expiring soon",
+                FindingStatus.INCORRECT,
+                "30 days",
+                "Renew",
+            ),
         ],
         raw={
             "ssl": {
@@ -346,11 +373,13 @@ def test_serialize_hides_security_and_keeps_real_email_issue():
     )
     detail = serialize_detail(site, result, [result], [])
     assert "HSTS" not in detail["findings_html"]
-    assert "SPF missing" in detail["findings_html"]
+    assert "SPF missing" not in detail["findings_html"]
     assert "Hostname match" not in detail["findings_html"]  # OK rows hidden
+    assert "Certificate expiring soon" in detail["findings_html"]
     row = serialize_site_row(site, result)
     assert row["ssl_expires"] == "2026-12-01"
     assert row["domain_expires"] == "—"
+    assert row["overall_label"] == "Worth a look"  # email critical ignored
 
 
 def test_inconclusive_finding_never_maps_to_critical():

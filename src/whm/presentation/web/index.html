@@ -4,11 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>WHM — Website Health Manager</title>
-  <link rel="icon" href="/static/favicon.ico" sizes="any" />
-  <link rel="apple-touch-icon" href="/static/icon-192.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=logo1" />
+  <link rel="icon" href="/static/icon-512.png?v=big1" type="image/png" sizes="512x512" />
+  <link rel="icon" href="/static/icon-192.png?v=big1" type="image/png" sizes="192x192" />
+  <link rel="icon" href="/static/favicon.ico?v=big1" sizes="48x48 32x32 16x16" />
+  <link rel="apple-touch-icon" href="/static/icon-512.png?v=big1" sizes="512x512" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=page1" />
 </head>
 <body>
+  <a class="skip-link" href="#workspace">Skip to websites</a>
   <div class="atmosphere" aria-hidden="true">
     <div class="orb orb-a"></div>
     <div class="orb orb-b"></div>
@@ -21,27 +27,28 @@
         <h1 class="brand brand-inline">WHM</h1>
       </div>
 
-      <form class="command command-inline" id="quick-form">
+      <form class="command command-inline" id="quick-form" aria-label="Check a website">
         <div class="command-row">
+          <label class="sr-only" for="url-input">Website address</label>
           <input
             id="url-input"
             name="url"
             type="text"
+            inputmode="url"
             autocomplete="off"
             spellcheck="false"
-            placeholder="Type a website… e.g. mybusiness.co.za"
+            placeholder="Website e.g. mybusiness.co.za"
             required
           />
+          <label class="sr-only" for="customer-input">Customer name (optional)</label>
           <input
             id="customer-input"
             type="text"
-            placeholder="Customer name (optional)"
+            placeholder="Customer (optional)"
             class="ghost-input inline-customer"
+            autocomplete="organization"
           />
-          <button type="submit" class="btn-primary" id="check-btn">
-            <span>Check</span>
-            <i aria-hidden="true">→</i>
-          </button>
+          <button type="submit" class="btn-primary" id="check-btn">Check</button>
         </div>
       </form>
 
@@ -51,17 +58,20 @@
       </div>
     </header>
 
-    <main class="work-pane work-pane-table" id="workspace">
-      <section class="view view-list" id="view-list">
+    <main class="work-pane work-pane-table" id="workspace" tabindex="-1">
+      <section class="view view-list" id="view-list" aria-labelledby="websites-heading">
         <header class="work-head">
           <div>
-            <h2>Websites</h2>
+            <h2 id="websites-heading">Websites</h2>
             <p id="status-line" class="muted status-line" aria-live="polite"></p>
           </div>
           <div class="work-actions">
-            <input id="search-input" type="search" placeholder="Search…" />
+            <label class="sr-only" for="search-input">Search websites</label>
+            <input id="search-input" type="search" placeholder="Search…" autocomplete="off" />
             <input id="import-file" type="file" accept=".xlsx,.csv,.txt" hidden />
             <button type="button" class="btn-ghost" id="import-btn">Import list</button>
+            <button type="button" class="btn-primary" id="check-all-btn">Check all</button>
+            <button type="button" class="btn-ghost" id="export-all-excel-btn" title="Save an Excel report for every website into Downloads">Export all</button>
             <button type="button" class="btn-ghost" id="refresh-btn">Refresh</button>
           </div>
         </header>
@@ -70,48 +80,65 @@
           <table class="data-table sites-table" id="sites-table">
             <thead>
               <tr>
-                <th>Website <button type="button" class="info-btn" data-tip="The customer site you are watching." aria-label="About Website">i</button></th>
-                <th>Status <button type="button" class="info-btn" data-tip="Overall health: green is fine, amber needs a look, red is broken." aria-label="About Status">i</button></th>
+                <th>Website <button type="button" class="info-btn" data-tip="The site you are watching." aria-label="About Website">i</button></th>
+                <th>Status <button type="button" class="info-btn" data-tip="Red = Needs a fix. Amber = Worth a look. Green = Looks good. Grey = Couldn’t finish. The line under Status points to the area to open." aria-label="About Status">i</button></th>
                 <th>Web <button type="button" class="info-btn" data-tip="Can people open the website in a browser right now?" aria-label="About Web">i</button></th>
-                <th>SSL expires <button type="button" class="info-btn" data-tip="When the padlock certificate ends. After that, browsers show a scary warning." aria-label="About SSL">i</button></th>
-                <th>Domain expires <button type="button" class="info-btn" data-tip="When the domain name registration ends. If it lapses, the site and email stop." aria-label="About Domain">i</button></th>
-                <th>DNS <button type="button" class="info-btn" data-tip="The internet address book for this site (where web and mail point)." aria-label="About DNS">i</button></th>
-                <th>Email <button type="button" class="info-btn" data-tip="Mail trust settings (SPF, DKIM, DMARC, SendGrid). Wrong settings = spam or failed mail." aria-label="About Email">i</button></th>
+                <th>SSL expires <button type="button" class="info-btn" data-tip="When the padlock certificate ends. After that, browsers warn that the connection is not secure." aria-label="About SSL">i</button></th>
+                <th>Domain expires <button type="button" class="info-btn" data-tip="When the domain name registration ends. If it lapses, the site can stop working." aria-label="About Domain">i</button></th>
+                <th>DNS <button type="button" class="info-btn" data-tip="The internet address book for this site (where the website points)." aria-label="About DNS">i</button></th>
                 <th>Last checked <button type="button" class="info-btn" data-tip="The last time WHM scanned this site." aria-label="About Last checked">i</button></th>
               </tr>
             </thead>
             <tbody id="site-list"></tbody>
           </table>
           <p id="empty-state" class="empty">
-            No websites yet — type one above and press Check.
+            No websites yet — type one above and press <strong>Check</strong>.
           </p>
         </div>
+        <nav class="pagination" id="pagination" aria-label="Website list pages" hidden>
+          <div class="pagination-meta" id="pagination-meta"></div>
+          <div class="pagination-controls">
+            <label class="pagination-size">
+              <span class="sr-only">Rows per page</span>
+              <select id="page-size" aria-label="Rows per page">
+                <option value="10">10 / page</option>
+                <option value="25" selected>25 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+            </label>
+            <button type="button" class="btn-ghost pagination-btn" id="page-prev" aria-label="Previous page">← Prev</button>
+            <div class="pagination-pages" id="pagination-pages"></div>
+            <button type="button" class="btn-ghost pagination-btn" id="page-next" aria-label="Next page">Next →</button>
+          </div>
+        </nav>
       </section>
 
-      <section class="view view-detail hidden" id="view-detail">
+      <section class="view view-detail hidden" id="view-detail" aria-labelledby="detail-name">
         <header class="work-head detail-head">
           <div class="detail-head-left">
             <button type="button" class="btn-ghost back-btn" id="back-btn">← All websites</button>
             <div>
               <p class="detail-kicker" id="detail-domain">—</p>
-              <h2 id="detail-name">—</h2>
+              <h2 id="detail-name" tabindex="-1">—</h2>
               <p class="detail-summary" id="detail-summary">—</p>
             </div>
           </div>
           <div class="detail-actions">
             <button type="button" class="btn-primary" id="rescan-btn">Check again</button>
-            <button type="button" class="btn-ghost" id="export-btn">Download report</button>
-            <button type="button" class="btn-danger" id="delete-btn">Remove</button>
+            <button type="button" class="btn-ghost" id="export-excel-btn">Excel</button>
+            <button type="button" class="btn-ghost" id="export-csv-btn">CSV</button>
+            <button type="button" class="btn-danger detail-remove" id="delete-btn">Remove</button>
           </div>
         </header>
 
         <article class="detail-col detail-full fullscreen-panel" id="detail">
           <div class="detail-empty hidden" id="detail-empty"></div>
           <div class="detail-body" id="detail-body">
-            <nav class="tabs" role="tablist">
-              <button type="button" class="tab active" data-tab="results">Problems &amp; fixes</button>
-              <button type="button" class="tab" data-tab="history">History</button>
-              <button type="button" class="tab" data-tab="changes">Changes</button>
+            <nav class="tabs" role="tablist" aria-label="Website details">
+              <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="results">Problems &amp; fixes</button>
+              <button type="button" class="tab" role="tab" aria-selected="false" data-tab="history">History</button>
+              <button type="button" class="tab" role="tab" aria-selected="false" data-tab="changes">Changes</button>
             </nav>
             <div class="tab-panels">
               <div class="tab-panel active" id="panel-results"></div>
@@ -124,11 +151,11 @@
     </main>
   </div>
 
-  <div class="modal hidden" id="settings-modal" role="dialog" aria-modal="true">
+  <div class="modal hidden" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div class="modal-card">
       <header>
-        <h3>Settings</h3>
-        <button type="button" class="icon-close" id="settings-close" aria-label="Close">×</button>
+        <h3 id="settings-title">Settings</h3>
+        <button type="button" class="icon-close" id="settings-close" aria-label="Close settings">×</button>
       </header>
       <form id="settings-form" class="settings-grid"></form>
       <footer>
@@ -138,11 +165,11 @@
     </div>
   </div>
 
-  <div class="modal hidden" id="help-modal" role="dialog" aria-modal="true">
+  <div class="modal hidden" id="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
     <div class="modal-card help-card">
       <header>
-        <h3>Get started</h3>
-        <button type="button" class="icon-close" id="help-close" aria-label="Close">×</button>
+        <h3 id="help-title">Get started</h3>
+        <button type="button" class="icon-close" id="help-close" aria-label="Close help">×</button>
       </header>
       <div class="help-body">
         <h4>Quick check</h4>
@@ -153,28 +180,29 @@
           <li>Press <strong>← All websites</strong> to go back to the full list.</li>
         </ol>
 
-        <h4>Many customers at once</h4>
+        <h4>Many websites at once</h4>
         <ol class="help-steps">
-          <li>Use an Excel/CSV with columns <strong>Client Website</strong> and <strong>URL</strong>.</li>
+          <li>Use an Excel/CSV with columns <strong>Website name</strong> and <strong>URL</strong>.</li>
           <li>Click <strong>Import list</strong> and choose the file.</li>
-          <li>Open a site and press <strong>Check again</strong>.</li>
+          <li>Open a site and press <strong>Check again</strong>, or press <strong>Check all</strong> to scan every site one by one.</li>
         </ol>
 
         <h4>What the colours mean</h4>
         <ul class="help-list">
-          <li><strong>Looks good</strong> — no action needed.</li>
-          <li><strong>Needs attention</strong> — fix soon.</li>
-          <li><strong>Something's wrong</strong> — likely breaking site or email.</li>
-          <li><strong>Couldn't check</strong> — your network failed the test; try again before escalating.</li>
+          <li><strong>Looks good</strong> (green) — fine.</li>
+          <li><strong>Worth a look</strong> (amber) — still works; improve when you can.</li>
+          <li><strong>Needs a fix</strong> (red) — fix soon: site not opening, or certificate/domain expired.</li>
+          <li><strong>Couldn’t finish</strong> (grey) — the check didn’t complete; try again.</li>
         </ul>
 
         <h4>Useful buttons</h4>
         <ul class="help-list">
-          <li><strong>Download report</strong> — ZIP to your PC (HTML, CSV, JSON).</li>
+          <li><strong>Excel</strong> / <strong>CSV</strong> — saves one site’s report into Downloads.</li>
+          <li><strong>Export all</strong> — one Excel for every website (Overview + Problems).</li>
           <li><strong>i</strong> on a column — short plain-English explanation.</li>
-          <li><strong>Settings</strong> — wait time, auto checks, alert webhooks.</li>
+          <li><strong>Settings</strong> — wait time, auto checks, alert webhooks. Hover each <strong>i</strong> for a plain-language explanation.</li>
         </ul>
-        <p class="help-note">Scroll the table to see every website. Your data stays on this computer.</p>
+        <p class="help-note">Use the page controls under the list when you have many websites. Status is about the site opening, certificate, domain, and DNS. Your data stays on this computer.</p>
       </div>
       <footer>
         <button type="button" class="btn-primary" id="help-ok">Got it</button>
@@ -182,9 +210,38 @@
     </div>
   </div>
 
-  <div class="toast hidden" id="toast"></div>
+  <div class="progress-dock hidden" id="loader" role="status" aria-live="polite" aria-busy="false">
+    <div class="progress-dock-inner">
+      <span class="progress-spinner" aria-hidden="true"></span>
+      <div class="progress-copy">
+        <p class="progress-title">Working…</p>
+        <p class="progress-msg" id="loader-msg">Please wait…</p>
+      </div>
+      <span class="progress-elapsed" id="loader-elapsed" aria-hidden="true"></span>
+    </div>
+  </div>
+  <div class="modal hidden" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-card confirm-card">
+      <header>
+        <h3 id="confirm-title">Please confirm</h3>
+        <button type="button" class="icon-close" id="confirm-close" aria-label="Close">×</button>
+      </header>
+      <p class="confirm-msg" id="confirm-msg"></p>
+      <footer>
+        <button type="button" class="btn-ghost" id="confirm-cancel">Cancel</button>
+        <button type="button" class="btn-primary" id="confirm-ok">OK</button>
+      </footer>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast" role="status" aria-live="polite">
+    <span class="toast-icon" aria-hidden="true"></span>
+    <span class="toast-text" id="toast-text"></span>
+    <button type="button" class="toast-dismiss" id="toast-dismiss" aria-label="Dismiss">×</button>
+    <span class="toast-bar" aria-hidden="true"></span>
+  </div>
   <div class="tip-bubble hidden" id="tip-bubble" role="tooltip"></div>
   <div id="pill-row" class="hidden" aria-hidden="true"></div>
-  <script src="/static/app.js?v=manual1"></script>
+  <script src="/static/app.js?v=page1"></script>
 </body>
 </html>

@@ -11,41 +11,29 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from whm.application.services import HealthScanService, SettingsService, WebsiteService
 from whm.domain.models import FindingStatus, HealthCheckResult, Website
-from whm.infrastructure.reports import build_report_bundle
+from whm.domain.status import display_overall, status_to_risk
+from whm.infrastructure.reports import (
+    save_portfolio_report_to_downloads,
+    save_report_to_downloads,
+)
 from whm.presentation.copy import (
     category_plain,
     category_tip,
     finding_plain,
     overall_summary,
+    overall_why,
     risk_plain,
     status_plain,
 )
+from whm.presentation.settings_fields import SETTINGS_FIELDS
+
 logger = logging.getLogger(__name__)
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
-
-SETTINGS_FIELDS = [
-    ("timeout_seconds", "Wait time (seconds)", "Increase if internet is slow."),
-    ("dns_server", "DNS server (optional)", "Leave blank for system DNS."),
-    ("check_interval", "Automatic checks", "manual | hourly | every_6_hours | daily | weekly"),
-    ("notify_on", "When to alert", "critical | warning | always | never"),
-    ("notify_desktop", "Desktop alerts", "1 = yes, 0 = no"),
-    ("export_folder", "Report folder", ""),
-    ("slack_webhook", "Slack webhook", ""),
-    ("discord_webhook", "Discord webhook", ""),
-    ("teams_webhook", "Teams webhook", ""),
-    ("generic_webhook", "Generic webhook", ""),
-    ("smtp_host", "SMTP host", ""),
-    ("smtp_port", "SMTP port", ""),
-    ("smtp_username", "SMTP username", ""),
-    ("smtp_password", "SMTP password", ""),
-    ("mail_from", "From email", ""),
-    ("mail_to", "To email", ""),
-]
 
 
 def _json_bytes(payload: Any, status: int = 200) -> tuple[int, bytes, str]:
@@ -87,6 +75,7 @@ def serialize_site_row(site: Website, latest: Optional[HealthCheckResult]) -> di
             "url": site.url,
             "overall": "unknown",
             "overall_label": "Not checked yet",
+            "overall_why": "Run Check to see the details",
             "website_label": "—",
             "website_status": "unknown",
             "ssl_label": "—",
@@ -99,8 +88,6 @@ def serialize_site_row(site: Website, latest: Optional[HealthCheckResult]) -> di
             "domain_expires_days": "",
             "dns_label": "—",
             "dns_status": "unknown",
-            "email_label": "—",
-            "email_status": "unknown",
             "risk_label": "—",
             "last_checked_label": "Never",
             "response_ms": "—",
@@ -113,13 +100,15 @@ def serialize_site_row(site: Website, latest: Optional[HealthCheckResult]) -> di
     domain_expires, domain_days = _expiry_bits(
         whois_raw.get("expiration_date"), whois_raw.get("days_remaining")
     )
+    overall = display_overall(latest)
     return {
         "id": site.id,
         "display_name": site.display_name,
         "domain": site.domain,
         "url": site.url,
-        "overall": latest.overall_status.value,
-        "overall_label": status_plain(latest.overall_status),
+        "overall": overall.value,
+        "overall_label": status_plain(overall),
+        "overall_why": overall_why(latest),
         "website_label": status_plain(latest.website_status),
         "website_status": latest.website_status.value,
         "ssl_label": status_plain(latest.ssl_status),
@@ -132,9 +121,7 @@ def serialize_site_row(site: Website, latest: Optional[HealthCheckResult]) -> di
         "domain_expires_days": domain_days,
         "dns_label": status_plain(latest.dns_status),
         "dns_status": latest.dns_status.value,
-        "email_label": status_plain(latest.email_status),
-        "email_status": latest.email_status.value,
-        "risk_label": risk_plain(latest.risk_level),
+        "risk_label": risk_plain(status_to_risk(overall)),
         "last_checked_label": latest.checked_at.strftime("%Y-%m-%d %H:%M"),
         "response_ms": (
             f"{latest.response_time_ms:.0f}"
@@ -164,23 +151,33 @@ def serialize_detail(
             "changes_html": empty_table,
         }
 
+    overall = display_overall(latest)
     pills = [
-        {"label": "Overall", "value": status_plain(latest.overall_status), "status": latest.overall_status.value},
+        {"label": "Overall", "value": status_plain(overall), "status": overall.value},
         {"label": "Website", "value": status_plain(latest.website_status), "status": latest.website_status.value},
         {"label": "Certificate", "value": status_plain(latest.ssl_status), "status": latest.ssl_status.value},
         {"label": "Domain", "value": status_plain(latest.domain_status), "status": latest.domain_status.value},
         {"label": "DNS", "value": status_plain(latest.dns_status), "status": latest.dns_status.value},
-        {"label": "Email", "value": status_plain(latest.email_status), "status": latest.email_status.value},
-        {"label": "Risk", "value": risk_plain(latest.risk_level), "status": latest.overall_status.value},
+        {"label": "Risk", "value": risk_plain(status_to_risk(overall)), "status": overall.value},
     ]
 
     # Problems tab: only actionable items. Skip OK/info and security/speed noise.
+    # Email auth findings are omitted — they clutter website monitoring.
     problem_statuses = {
         FindingStatus.INCORRECT,
         FindingStatus.MISSING,
         FindingStatus.INCONCLUSIVE,
     }
-    ignored_categories = {"security", "performance"}
+    ignored_categories = {
+        "security",
+        "performance",
+        "smtp",
+        "spf",
+        "dkim",
+        "dmarc",
+        "mx",
+        "sendgrid",
+    }
     finding_rows: list[str] = []
     for finding in latest.findings:
         if finding.category in ignored_categories:
@@ -210,9 +207,9 @@ def serialize_detail(
         "<div class='table-wrap'><table class='data-table findings-table'>"
         "<thead><tr>"
         "<th>Area <button type='button' class='info-btn' data-tip='Which part of the site this problem is about.' aria-label='About Area'>i</button></th>"
-        "<th>Status <button type='button' class='info-btn' data-tip='Missing or needs fixing means you should act. Couldn’t check means your network blocked the test.' aria-label='About Status'>i</button></th>"
-        "<th>Problem <button type='button' class='info-btn' data-tip='What is wrong, in plain words.' aria-label='About Problem'>i</button></th>"
-        "<th>Fix <button type='button' class='info-btn' data-tip='The next step to put it right.' aria-label='About Fix'>i</button></th>"
+        "<th>Status <button type='button' class='info-btn' data-tip='Review or Not set up means there is something to improve. Couldn’t finish means the check did not complete — try again.' aria-label='About Status'>i</button></th>"
+        "<th>Problem <button type='button' class='info-btn' data-tip='What we found, in plain words.' aria-label='About Problem'>i</button></th>"
+        "<th>Fix <button type='button' class='info-btn' data-tip='A practical next step.' aria-label='About Fix'>i</button></th>"
         "</tr></thead>"
         f"<tbody>{''.join(finding_rows)}</tbody></table></div>"
         if finding_rows
@@ -222,10 +219,12 @@ def serialize_detail(
     hist_rows = []
     for item in history:
         ms = f"{item.response_time_ms:.0f}" if item.response_time_ms is not None else "—"
+        # Recompute — older rows may have stored overall from email checks.
+        hist_overall = display_overall(item)
         hist_rows.append(
             "<tr>"
             f"<td>{item.checked_at.strftime('%Y-%m-%d %H:%M:%S')}</td>"
-            f"<td><span class='pill {item.overall_status.value}'>{_escape(status_plain(item.overall_status))}</span></td>"
+            f"<td><span class='pill {hist_overall.value}'>{_escape(status_plain(hist_overall))}</span></td>"
             f"<td>{ms}</td>"
             "</tr>"
         )
@@ -261,9 +260,10 @@ def serialize_detail(
         "id": site.id,
         "display_name": site.display_name,
         "domain": site.domain,
-        "summary": overall_summary(latest.overall_status, site.display_name),
-        "overall": latest.overall_status.value,
-        "overall_label": status_plain(latest.overall_status),
+        "summary": overall_summary(overall, site.display_name),
+        "overall": overall.value,
+        "overall_label": status_plain(overall),
+        "overall_why": overall_why(latest),
         "pills": pills,
         "findings_html": findings_html,
         "history_html": history_html,
@@ -377,11 +377,12 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                     {
                         "key": key,
                         "label": label,
+                        "tip": tip,
                         "hint": hint,
                         "value": values.get(key, ""),
                         "type": "password" if "password" in key else "text",
                     }
-                    for key, label, hint in SETTINGS_FIELDS
+                    for key, label, tip, hint in SETTINGS_FIELDS
                 ]
                 self._send(*_json_bytes({"fields": fields}))
                 return
@@ -426,6 +427,45 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                     )
                     return
                 self._send(*_json_bytes({"id": site.id, "domain": site.domain}))
+                return
+
+            if path == "/api/export-all":
+                sites = ctx.websites.list_websites()
+                if not sites:
+                    self._send(
+                        *_json_bytes(
+                            {"error": "No websites yet — import a list or check one first"},
+                            400,
+                        )
+                    )
+                    return
+                fmt = str(payload.get("format", "excel") or "excel").strip().lower()
+                rows = [
+                    (site, ctx.scans.latest(site.id) if site.id else None)
+                    for site in sites
+                ]
+                try:
+                    saved = save_portfolio_report_to_downloads(rows, format=fmt)
+                except OSError as exc:
+                    self._send(
+                        *_json_bytes(
+                            {"error": f"Could not save to Downloads: {exc}"},
+                            500,
+                        )
+                    )
+                    return
+                self._send(
+                    *_json_bytes(
+                        {
+                            "ok": True,
+                            "format": "csv" if fmt == "csv" else "excel",
+                            "filename": saved.name,
+                            "path": str(saved),
+                            "folder": str(saved.parent),
+                            "site_count": len(sites),
+                        }
+                    )
+                )
                 return
 
             if path == "/api/import":
@@ -496,7 +536,7 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                             ctx.jobs[job_id] = {
                                 "status": "error",
                                 "error": str(exc),
-                                "message": "Check failed",
+                                "message": "Check didn’t finish",
                             }
 
                 threading.Thread(target=worker, daemon=True).start()
@@ -510,12 +550,30 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 if site is None or latest is None:
                     self._send(*_json_bytes({"error": "Nothing to download yet — run Check first"}, 400))
                     return
-                filename, payload = build_report_bundle(site, latest)
+                fmt = (
+                    parse_qs(urlparse(self.path).query).get("format", ["excel"])[0]
+                    or "excel"
+                ).strip().lower()
+                try:
+                    saved = save_report_to_downloads(site, latest, format=fmt)
+                except OSError as exc:
+                    self._send(
+                        *_json_bytes(
+                            {"error": f"Could not save to Downloads: {exc}"},
+                            500,
+                        )
+                    )
+                    return
                 self._send(
-                    200,
-                    payload,
-                    "application/zip",
-                    download_name=filename,
+                    *_json_bytes(
+                        {
+                            "ok": True,
+                            "format": "csv" if fmt == "csv" else "excel",
+                            "filename": saved.name,
+                            "path": str(saved),
+                            "folder": str(saved.parent),
+                        }
+                    )
                 )
                 return
 

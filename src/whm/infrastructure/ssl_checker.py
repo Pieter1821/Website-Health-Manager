@@ -1,19 +1,31 @@
-"""SSL/TLS certificate inspection."""
+"""SSL/TLS certificate inspection (SNI, wildcards, chain trust, CDN labeling)."""
 
 from __future__ import annotations
 
 import socket
 import ssl
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.x509.oid import ExtensionOID, NameOID
 
+from whm.domain.hostnames import normalize_hostname, split_host_port
 from whm.domain.models import Finding, FindingStatus, HealthStatus
 from whm.domain.probe import is_probe_failure, probe_failed_finding
 from whm.domain.status import days_to_status, worst_status
+
+_CDN_ISSUER_MARKERS = (
+    "cloudflare",
+    "cloudfront",
+    "akamai",
+    "fastly",
+    "incapsula",
+    "sucuri",
+    "imperva",
+    "keycdn",
+)
 
 
 def _parse_cert(der_bytes: bytes) -> x509.Certificate:
@@ -35,51 +47,116 @@ def _get_sans(cert: x509.Certificate) -> list[str]:
         return []
 
 
-def _hostname_matches(hostname: str, sans: list[str], subject_cn: str | None) -> bool:
+def hostname_matches(hostname: str, sans: list[str], subject_cn: str | None) -> bool:
+    """Exact SAN/CN match or single-label wildcard (*.example.com → a.example.com)."""
     candidates = list(sans)
     if subject_cn:
         candidates.append(subject_cn)
-    host = hostname.lower().rstrip(".")
+    host = normalize_hostname(hostname)
     for name in candidates:
         pattern = name.lower().rstrip(".")
         if pattern.startswith("*."):
-            # Wildcard: *.example.com matches a.example.com, not example.com
+            # RFC 6125: *.a.b matches one label left of a.b, not a.b itself.
             suffix = pattern[1:]  # ".example.com"
-            if host.endswith(suffix) and host.count(".") == pattern.count("."):
+            if (
+                host.endswith(suffix)
+                and host != suffix.lstrip(".")
+                and host.count(".") == pattern.count(".")
+            ):
                 return True
         elif host == pattern:
             return True
     return False
 
 
-def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str, Any]:
-    """Fetch and evaluate the TLS certificate for hostname:port."""
-    findings: list[Finding] = []
-    hostname = hostname.strip().lower().rstrip(".")
+def _issuer_looks_like_cdn(issuer: dict[str, str]) -> Optional[str]:
+    blob = " ".join(str(v) for v in issuer.values()).lower()
+    for marker in _CDN_ISSUER_MARKERS:
+        if marker in blob:
+            return marker
+    return None
 
-    try:
-        context = ssl.create_default_context()
-        with socket.create_connection((hostname, port), timeout=timeout) as sock:
-            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
-                der = ssock.getpeercert(binary_form=True)
-                tls_version = ssock.version()
-                cipher = ssock.cipher()
-        assert der is not None
-        cert = _parse_cert(der)
-    except ssl.SSLCertVerificationError as exc:
+
+def _fetch_peer_cert(
+    hostname: str,
+    port: int,
+    timeout: float,
+    *,
+    verify: bool,
+) -> tuple[bytes, str | None, tuple[Any, ...] | None]:
+    """
+    Connect with SNI (server_hostname=hostname). Never connect by IP alone.
+    When verify=False, still send SNI so we inspect the name-based cert.
+    """
+    context = ssl.create_default_context()
+    if not verify:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((hostname, port), timeout=timeout) as sock:
+        with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+            der = ssock.getpeercert(binary_form=True)
+            tls_version = ssock.version()
+            cipher = ssock.cipher()
+    if der is None:
+        raise OSError("No peer certificate returned")
+    return der, tls_version, cipher
+
+
+def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str, Any]:
+    """Fetch and evaluate the TLS certificate for hostname:port using SNI."""
+    host, parsed_port = split_host_port(hostname, default_port=port)
+    if parsed_port != 443 or ":" in (hostname or ""):
+        port = parsed_port
+    hostname = normalize_hostname(host)
+    if not hostname:
         return {
-            "status": HealthStatus.CRITICAL,
+            "status": HealthStatus.UNKNOWN,
             "findings": [
                 Finding(
                     category="ssl",
-                    title="Certificate validation failed",
-                    status=FindingStatus.INCORRECT,
-                    message=str(exc),
-                    recommendation="Install a valid certificate from a trusted CA; check hostname and chain.",
+                    title="SSL check skipped",
+                    status=FindingStatus.INCONCLUSIVE,
+                    message="No hostname to check.",
                 )
             ],
-            "raw": {"hostname": hostname, "error": str(exc)},
+            "raw": {"hostname": "", "error": "empty hostname"},
         }
+
+    findings: list[Finding] = []
+    verified = True
+    verify_error: str | None = None
+    der: bytes
+    tls_version: str | None
+    cipher: tuple[Any, ...] | None
+
+    try:
+        der, tls_version, cipher = _fetch_peer_cert(
+            hostname, port, timeout, verify=True
+        )
+    except ssl.SSLCertVerificationError as exc:
+        verified = False
+        verify_error = str(exc)
+        try:
+            der, tls_version, cipher = _fetch_peer_cert(
+                hostname, port, timeout, verify=False
+            )
+        except Exception:  # noqa: BLE001
+            return {
+                "status": HealthStatus.CRITICAL,
+                "findings": [
+                    Finding(
+                        category="ssl",
+                        title="Certificate validation failed",
+                        status=FindingStatus.INCORRECT,
+                        message=str(exc),
+                        recommendation=(
+                            "Install a valid certificate from a trusted CA; "
+                            "check hostname, expiry, and the full certificate chain."
+                        ),
+                    )
+                ],
+                "raw": {"hostname": hostname, "port": port, "error": str(exc)},
+            }
     except (socket.timeout, TimeoutError) as exc:
         return {
             "status": HealthStatus.UNKNOWN,
@@ -90,20 +167,26 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
                     f"Timed out connecting to {hostname}:{port}: {exc}",
                 )
             ],
-            "raw": {"hostname": hostname, "error": "timeout", "probe_failed": True},
+            "raw": {
+                "hostname": hostname,
+                "port": port,
+                "error": "timeout",
+                "probe_failed": True,
+            },
         }
     except OSError as exc:
         if is_probe_failure(exc):
             return {
                 "status": HealthStatus.UNKNOWN,
                 "findings": [
-                    probe_failed_finding(
-                        "ssl",
-                        "SSL check inconclusive",
-                        str(exc),
-                    )
+                    probe_failed_finding("ssl", "SSL check inconclusive", str(exc))
                 ],
-                "raw": {"hostname": hostname, "error": str(exc), "probe_failed": True},
+                "raw": {
+                    "hostname": hostname,
+                    "port": port,
+                    "error": str(exc),
+                    "probe_failed": True,
+                },
             }
         return {
             "status": HealthStatus.CRITICAL,
@@ -113,12 +196,13 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
                     title="SSL connection failed",
                     status=FindingStatus.MISSING,
                     message=str(exc),
-                    recommendation="Verify the host resolves and port 443 is open.",
+                    recommendation="Verify the host resolves and the HTTPS port is open.",
                 )
             ],
-            "raw": {"hostname": hostname, "error": str(exc)},
+            "raw": {"hostname": hostname, "port": port, "error": str(exc)},
         }
 
+    cert = _parse_cert(der)
     not_before = cert.not_valid_before_utc
     not_after = cert.not_valid_after_utc
     now = datetime.now(timezone.utc)
@@ -126,22 +210,38 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
 
     issuer = _name_as_dict(cert.issuer)
     subject = _name_as_dict(cert.subject)
-    subject_cn = subject.get("commonName")
     try:
-        subject_cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value  # type: ignore[assignment]
+        subject_cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
     except IndexError:
         subject_cn = subject.get("commonName")
+    subject_cn_str = subject_cn if isinstance(subject_cn, str) else None
 
     sans = _get_sans(cert)
     is_wildcard = any(s.startswith("*.") for s in sans) or (
-        isinstance(subject_cn, str) and subject_cn.startswith("*.")
+        isinstance(subject_cn_str, str) and subject_cn_str.startswith("*.")
     )
-    hostname_ok = _hostname_matches(hostname, sans, subject_cn if isinstance(subject_cn, str) else None)
-
-    # Self-signed heuristic: issuer == subject
+    hostname_ok = hostname_matches(hostname, sans, subject_cn_str)
     self_signed = cert.issuer == cert.subject
+    cdn_marker = _issuer_looks_like_cdn(issuer)
 
     statuses: list[HealthStatus] = [days_to_status(days_remaining)]
+
+    if not verified:
+        findings.append(
+            Finding(
+                category="ssl",
+                title="Certificate chain / trust failed",
+                status=FindingStatus.INCORRECT,
+                message=verify_error or "Browser-trusted validation failed.",
+                recommendation=(
+                    "Fix the certificate chain (install the intermediate CA), "
+                    "replace an expired or revoked cert, or use a publicly trusted CA. "
+                    "This is separate from the expiry date below."
+                ),
+                details={"verify_error": verify_error},
+            )
+        )
+        statuses.append(HealthStatus.CRITICAL)
 
     findings.append(
         Finding(
@@ -165,13 +265,14 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
     )
 
     if hostname_ok:
+        cover = "wildcard SAN" if is_wildcard else "SAN/CN"
         findings.append(
             Finding(
                 category="ssl",
                 title="Hostname match",
                 status=FindingStatus.CORRECT,
-                message=f"Certificate covers {hostname}.",
-                details={"sans": sans, "cn": subject_cn},
+                message=f"Certificate covers {hostname} ({cover}).",
+                details={"sans": sans, "cn": subject_cn_str, "matched_via_wildcard": is_wildcard},
             )
         )
     else:
@@ -180,9 +281,9 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
                 category="ssl",
                 title="Hostname mismatch",
                 status=FindingStatus.INCORRECT,
-                message=f"Certificate does not cover {hostname}.",
-                recommendation="Issue a certificate that includes this hostname in SAN.",
-                details={"sans": sans, "cn": subject_cn},
+                message=f"Certificate does not cover {hostname} (checked SANs with wildcard rules).",
+                recommendation="Issue a certificate that includes this hostname or a matching wildcard SAN.",
+                details={"sans": sans, "cn": subject_cn_str},
             )
         )
         statuses.append(HealthStatus.CRITICAL)
@@ -191,10 +292,10 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
         findings.append(
             Finding(
                 category="ssl",
-                title="Self-signed certificate",
+                title="Not trusted (self-signed)",
                 status=FindingStatus.INCORRECT,
-                message="Issuer matches subject (self-signed).",
-                recommendation="Replace with a publicly trusted certificate (Let's Encrypt, commercial CA).",
+                message="Self-signed certificate — browsers will warn visitors.",
+                recommendation="Replace with a publicly trusted certificate (Let's Encrypt or commercial CA).",
             )
         )
         statuses.append(HealthStatus.WARNING)
@@ -206,6 +307,25 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
                 status=FindingStatus.CORRECT,
                 message=f"Issued by {issuer.get('organizationName') or issuer.get('commonName') or 'unknown'}.",
                 details={"issuer": issuer},
+            )
+        )
+
+    if cdn_marker:
+        findings.append(
+            Finding(
+                category="ssl",
+                title="CDN / proxy certificate",
+                status=FindingStatus.INFO,
+                message=(
+                    f"This looks like an edge certificate ({cdn_marker}). "
+                    "WHM checked what visitors hit at the proxy — the origin server "
+                    "behind the CDN was not checked separately."
+                ),
+                recommendation=(
+                    "If you need origin SSL health, check the origin host directly "
+                    "or in the CDN dashboard."
+                ),
+                details={"cdn": cdn_marker},
             )
         )
 
@@ -237,7 +357,7 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
                 category="ssl",
                 title="Wildcard certificate",
                 status=FindingStatus.INFO,
-                message="Certificate includes a wildcard name.",
+                message="Certificate includes a wildcard name (valid for matching subdomains).",
                 details={"sans": sans},
             )
         )
@@ -247,6 +367,10 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
         "findings": findings,
         "raw": {
             "hostname": hostname,
+            "port": port,
+            "sni": hostname,
+            "verified": verified,
+            "verify_error": verify_error,
             "issuer": issuer,
             "subject": subject,
             "sans": sans,
@@ -257,5 +381,6 @@ def check_ssl(hostname: str, port: int = 443, timeout: float = 10.0) -> dict[str
             "cipher": cipher,
             "self_signed": self_signed,
             "wildcard": is_wildcard,
+            "cdn_edge": cdn_marker,
         },
     }

@@ -1,4 +1,4 @@
-"""End-to-end import + report download bundle (no live network scan)."""
+"""End-to-end import + Excel/CSV report download (no live network scan)."""
 
 from pathlib import Path
 
@@ -11,7 +11,7 @@ from whm.domain.models import (
     RiskLevel,
 )
 from whm.infrastructure.database import connect, initialize_database
-from whm.infrastructure.reports import build_report_bundle
+from whm.infrastructure.reports import build_csv_report, build_excel_report
 from whm.infrastructure.repositories import (
     SqliteCustomerRepository,
     SqliteHealthCheckRepository,
@@ -21,7 +21,7 @@ from whm.infrastructure.repositories import (
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
 
-def test_import_example_clients_then_export_zip(tmp_path: Path):
+def test_import_example_clients_then_export_files(tmp_path: Path):
     conn = connect(tmp_path / "flow.db")
     initialize_database(conn)
     websites = WebsiteService(
@@ -33,17 +33,15 @@ def test_import_example_clients_then_export_zip(tmp_path: Path):
     path = EXAMPLES / "test-clients-import.csv"
     result = websites.import_list(path.name, path.read_bytes())
     assert result.errors == []
-    assert len(result.added) == 7
+    assert len(result.added) == 6
 
     sites = websites.list_websites()
-    assert len(sites) == 7
-    asha = next(s for s in sites if "asha" in s.domain)
-    assert asha.display_name == "ASHA Finance"
+    demo = next(s for s in sites if "demo-shop" in s.domain)
+    assert demo.display_name == "Demo Shop"
 
-    # Fake a completed scan so export has content.
     saved = health.add(
         HealthCheckResult(
-            website_id=asha.id,
+            website_id=demo.id,
             overall_status=HealthStatus.WARNING,
             risk_level=RiskLevel.MEDIUM,
             website_status=HealthStatus.HEALTHY,
@@ -53,32 +51,36 @@ def test_import_example_clients_then_export_zip(tmp_path: Path):
             email_status=HealthStatus.WARNING,
             findings=[
                 Finding(
-                    "spf",
-                    "SPF needs fixing",
+                    "dns",
+                    "DNS settings changed",
                     FindingStatus.INCORRECT,
-                    "Include sendgrid is missing",
-                    "Add include:sendgrid.net",
+                    "A record moved",
+                    "Confirm the change was intentional",
                 ),
                 Finding(
                     "security",
                     "HSTS missing",
                     FindingStatus.MISSING,
                     "ignored category",
-                    "should not appear in zip",
+                    "should not appear in report",
+                ),
+                Finding(
+                    "spf",
+                    "SPF needs fixing",
+                    FindingStatus.INCORRECT,
+                    "ignored email category",
+                    "should not appear",
                 ),
             ],
         )
     )
-    import zipfile
-    from io import BytesIO
 
-    filename, payload = build_report_bundle(asha, saved)
-    assert filename.endswith(".zip")
-    assert payload[:2] == b"PK"
-    with zipfile.ZipFile(BytesIO(payload)) as archive:
-        joined = "\n".join(
-            archive.read(name).decode("utf-8") for name in archive.namelist()
-        )
-    assert "SPF" in joined
-    assert "HSTS missing" not in joined
-    assert extract_domain(asha.url) == asha.domain
+    xname, xbytes = build_excel_report(demo, saved)
+    cname, cbytes = build_csv_report(demo, saved)
+    assert xname.endswith(".xlsx")
+    assert cname.endswith(".csv")
+    text = cbytes.decode("utf-8-sig")
+    assert "DNS settings changed" in text
+    assert "HSTS missing" not in text
+    assert "SPF needs fixing" not in text
+    assert extract_domain(demo.url) == demo.domain

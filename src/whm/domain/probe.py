@@ -1,4 +1,4 @@
-"""Helpers to distinguish local probe/network failures from real site issues."""
+"""Helpers to distinguish scanner-side network failures from real site issues."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 
 from whm.domain.models import Finding, FindingStatus
 
-# Patterns that usually mean *our* network/DNS failed — not the customer's server config.
+# Patterns that usually mean the scanner could not reach the target reliably.
 _PROBE_PATTERNS = (
     r"getaddrinfo failed",
     r"name or service not known",
@@ -18,7 +18,7 @@ _PROBE_PATTERNS = (
     r"name resolution",
     r"dns operation timed out",
     r"the resolution lifetime expired",
-    r"all connection attempts failed",  # httpx wraps many local failures this way
+    r"all connection attempts failed",
     r"connect call failed",
     r"timed out",
     r"timeout",
@@ -40,7 +40,7 @@ _PROBE_PATTERNS = (
 
 
 def is_probe_failure(message: str | BaseException | None) -> bool:
-    """Return True when an error likely comes from the local probe network."""
+    """Return True when an error likely means the scan could not finish the check."""
     if message is None:
         return False
     text = str(message).lower()
@@ -61,9 +61,8 @@ def probe_failed_finding(
         status=FindingStatus.INCONCLUSIVE,
         message=message,
         recommendation=(
-            "This looks like a local network/DNS/Wi‑Fi problem while scanning, "
-            "not proof that the customer's site is broken. "
-            "Retry on a stable connection before escalating."
+            "The check could not finish from here. "
+            "Try again on a steadier connection before treating this as a site problem."
         ),
         details={**(details or {}), "probe_failed": True},
     )

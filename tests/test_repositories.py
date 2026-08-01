@@ -65,3 +65,23 @@ def test_website_crud_and_health(tmp_path: Path):
     assert latest.id == saved.id
     assert latest.findings[0].category == "spf"
     assert any(w.domain == "example.com" for w in service.search("exam"))
+    assert any(w.domain == "example.com" for w in service.search("Acme"))
+
+    settings.set("timeout_seconds", "25")
+    assert settings.get("timeout_seconds") == "25"
+    assert settings.get_all()["timeout_seconds"] == "25"
+
+    orphan = HealthCheckResult(
+        website_id=99999,
+        overall_status=HealthStatus.HEALTHY,
+        risk_level=RiskLevel.LOW,
+        website_status=HealthStatus.HEALTHY,
+        ssl_status=HealthStatus.HEALTHY,
+        domain_status=HealthStatus.HEALTHY,
+        dns_status=HealthStatus.HEALTHY,
+        email_status=HealthStatus.HEALTHY,
+    )
+    import pytest
+
+    with pytest.raises(ValueError):
+        health.add(orphan)

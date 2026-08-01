@@ -9,6 +9,7 @@ from typing import Any, Optional
 import dns.exception
 import dns.resolver
 
+from whm.domain.hostnames import registrable_domain
 from whm.domain.models import Finding, FindingStatus, HealthStatus
 from whm.domain.probe import is_probe_failure, probe_failed_finding
 from whm.domain.status import aggregate_status
@@ -199,8 +200,11 @@ def check_dkim(
                         category="dkim",
                         title=f"DKIM selector '{selector}' empty key",
                         status=FindingStatus.INCORRECT,
-                        message=f"Record at {name} has empty/revoked p=.",
-                        recommendation="Publish a valid DKIM public key for this selector.",
+                        message=f"Record at {name} has an empty or revoked key (p=).",
+                        recommendation=(
+                            "Replace this selector’s key with the current value from "
+                            "your email provider (SendGrid Domain Authentication, etc.)."
+                        ),
                     )
                 )
         else:
@@ -209,11 +213,15 @@ def check_dkim(
                     category="dkim",
                     title=f"DKIM selector '{selector}'",
                     status=FindingStatus.MISSING,
-                    message=f"No DKIM TXT at {name}.",
-                    recommendation="Add the DKIM CNAME/TXT provided by your ESP (e.g. SendGrid).",
+                    message=f"No DKIM record at {name}.",
+                    recommendation=(
+                        "Add the exact CNAME/TXT from your email provider. "
+                        "Selectors are provider-specific — do not guess."
+                    ),
                 )
             )
 
+    checked = [s.strip() for s in selectors if s.strip()]
     if found:
         # Downgrade pure-missing noise: if at least one selector works, treat missing others as info.
         adjusted: list[Finding] = []
@@ -224,7 +232,7 @@ def check_dkim(
                         category=f.category,
                         title=f.title,
                         status=FindingStatus.INFO,
-                        message=f.message + " (optional if another selector is active)",
+                        message=f.message + " (optional — another selector is already active)",
                         recommendation=f.recommendation,
                         details=f.details,
                     )
@@ -232,6 +240,34 @@ def check_dkim(
             else:
                 adjusted.append(f)
         findings = adjusted
+    elif attempts > 0 and probe_failures == 0 and checked:
+        # One clear finding instead of N "missing selector" rows.
+        findings = [
+            f
+            for f in findings
+            if not (f.category == "dkim" and f.status == FindingStatus.MISSING)
+        ]
+        listed = ", ".join(checked)
+        findings.append(
+            Finding(
+                category="dkim",
+                title="DKIM not found on common selectors",
+                status=FindingStatus.MISSING,
+                message=(
+                    f"Checked {listed} — none published a public key. "
+                    "This is worth fixing for deliverability, but mail can still send. "
+                    "Your provider may use a different selector name than these commons."
+                ),
+                recommendation=(
+                    "In your email provider (Microsoft 365, Google, Mailchimp, SendGrid, "
+                    "etc.), open domain authentication / DKIM and copy the exact DNS "
+                    "records shown. Enter only the short host (e.g. s1._domainkey) — "
+                    "many DNS panels auto-add the domain; entering the full name twice "
+                    "breaks DKIM. Confirm with a test email header: DKIM=pass."
+                ),
+                details={"checked_selectors": checked},
+            )
+        )
 
     return {
         "findings": findings,
@@ -271,7 +307,11 @@ def check_dmarc(
                 title="DMARC record",
                 status=FindingStatus.MISSING,
                 message=f"No DMARC TXT at {name}.",
-                recommendation="Add TXT v=DMARC1; p=none; rua=mailto:you@example.com then tighten policy.",
+                recommendation=(
+                    "Add a TXT at _dmarc: v=DMARC1; p=none; rua=mailto:you@yourdomain "
+                    "(start with monitor-only). After SPF and DKIM pass consistently, "
+                    "tighten to p=quarantine, then p=reject."
+                ),
             )
         )
         return {"findings": findings, "record": None, "probe_ok": True}
@@ -299,8 +339,14 @@ def check_dmarc(
                     category="dmarc",
                     title="DMARC policy",
                     status=FindingStatus.INCORRECT,
-                    message="Policy is p=none (monitor only).",
-                    recommendation="After validating reports, move to p=quarantine or p=reject.",
+                    message=(
+                        "Policy is p=none — reports only; spoofed mail is not blocked yet."
+                    ),
+                    recommendation=(
+                        "Fine while you confirm SPF and DKIM pass on real mail. "
+                        "Then move to p=quarantine, and later p=reject. "
+                        "Do not jump to reject until authentication looks solid."
+                    ),
                 )
             )
         else:
@@ -390,7 +436,7 @@ def check_mx(
                 category="mx",
                 title="MX records",
                 status=FindingStatus.MISSING,
-                message="No MX records found — inbound email will fail.",
+                message="No MX records found — incoming email may not be delivered.",
                 recommendation="Add MX records for your mail provider (Microsoft 365, Google, etc.).",
             )
         )
@@ -452,15 +498,37 @@ def check_smtp_ports(
                 Finding(
                     category="smtp",
                     title=f"SMTP port {port}",
-                    status=FindingStatus.INFO if port == 25 else FindingStatus.INCORRECT,
-                    message=f"Could not connect to {host}:{port}: {exc}",
+                    status=FindingStatus.INFO,
+                    message=f"Could not connect to {host}:{port}.",
                     recommendation=(
-                        "Port 25 is often blocked on residential/ISP networks; "
-                        "465/587 failures may indicate firewall or wrong MX host."
+                        "Mail-port probes are often blocked and are not proof mail is broken. "
+                        "Trust MX / SPF / DKIM / DMARC for deliverability."
                     ),
                 )
             )
     return findings
+
+
+def _sendgrid_cname_selectors(
+    domain: str,
+    nameserver: Optional[str] = None,
+    timeout: float = 10.0,
+) -> list[str]:
+    """Return s1/s2 selectors whose CNAME points at sendgrid.net."""
+    found: list[str] = []
+    resolver = _resolver(nameserver, timeout)
+    for selector in ("s1", "s2"):
+        name = f"{selector}._domainkey.{domain}"
+        try:
+            answers = resolver.resolve(name, "CNAME")
+            for rdata in answers:
+                target = str(rdata.target).rstrip(".").lower()
+                if "sendgrid.net" in target:
+                    found.append(selector)
+                    break
+        except Exception:  # noqa: BLE001
+            continue
+    return found
 
 
 def check_sendgrid(
@@ -470,11 +538,21 @@ def check_sendgrid(
     nameserver: Optional[str] = None,
     timeout: float = 10.0,
 ) -> list[Finding]:
-    """SendGrid domain authentication / link branding DNS checklist."""
+    """
+    SendGrid DNS checklist — only when the domain already looks like it uses SendGrid.
+
+    Sites with no SendGrid SPF/CNAME hints return no findings (not “missing SendGrid”).
+    """
     findings: list[Finding] = []
     spf_joined = " ".join(spf_records).lower()
+    spf_has_sendgrid = "include:sendgrid.net" in spf_joined
+    cname_ok = _sendgrid_cname_selectors(domain, nameserver=nameserver, timeout=timeout)
+    # s1/s2 TXT alone is shared by other ESPs — only treat as SendGrid with SPF or CNAME.
+    uses_sendgrid = spf_has_sendgrid or bool(cname_ok)
+    if not uses_sendgrid:
+        return []
 
-    if "include:sendgrid.net" in spf_joined:
+    if spf_has_sendgrid:
         findings.append(
             Finding(
                 category="sendgrid",
@@ -489,57 +567,41 @@ def check_sendgrid(
                 category="sendgrid",
                 title="SendGrid SPF include",
                 status=FindingStatus.MISSING,
-                message="SPF does not include include:sendgrid.net.",
-                recommendation="Add include:sendgrid.net to the domain SPF if you send via SendGrid.",
+                message="SendGrid DKIM was found, but SPF is missing include:sendgrid.net.",
+                recommendation="Add include:sendgrid.net to the domain SPF (merge into the existing v=spf1 record).",
             )
         )
 
     sg_selectors = [s for s in ("s1", "s2") if s in dkim_found]
-    if sg_selectors:
+    if sg_selectors or cname_ok:
+        label = ", ".join(sg_selectors or cname_ok)
         findings.append(
             Finding(
                 category="sendgrid",
                 title="SendGrid DKIM",
                 status=FindingStatus.CORRECT,
-                message="Found selectors: " + ", ".join(sg_selectors),
+                message="Found selectors: " + label,
             )
         )
     else:
-        # Also accept CNAMEs s1/s2._domainkey pointing at sendgrid.net
-        cname_ok: list[str] = []
-        resolver = _resolver(nameserver, timeout)
-        for selector in ("s1", "s2"):
-            name = f"{selector}._domainkey.{domain}"
-            try:
-                answers = resolver.resolve(name, "CNAME")
-                for rdata in answers:
-                    target = str(rdata.target).rstrip(".").lower()
-                    if "sendgrid.net" in target:
-                        cname_ok.append(selector)
-            except Exception:  # noqa: BLE001
-                continue
-        if cname_ok:
-            findings.append(
-                Finding(
-                    category="sendgrid",
-                    title="SendGrid DKIM",
-                    status=FindingStatus.CORRECT,
-                    message="CNAME selectors point to SendGrid: " + ", ".join(cname_ok),
-                )
+        findings.append(
+            Finding(
+                category="sendgrid",
+                title="SendGrid DKIM",
+                status=FindingStatus.MISSING,
+                message=(
+                    "SPF mentions SendGrid, but DKIM CNAMEs (s1/s2._domainkey) were not found."
+                ),
+                recommendation=(
+                    "In SendGrid → Sender Authentication → Domain Authentication, "
+                    "check Verified and re-add the CNAMEs shown. Use the short host "
+                    "(e.g. s1._domainkey) only — DNS panels often append the domain "
+                    "for you. Confirm with a DNS lookup that the name is not doubled."
+                ),
             )
-        else:
-            findings.append(
-                Finding(
-                    category="sendgrid",
-                    title="SendGrid DKIM",
-                    status=FindingStatus.MISSING,
-                    message="SendGrid DKIM selectors s1/s2 not found.",
-                    recommendation="In SendGrid → Settings → Sender Authentication, add Domain Authentication and create s1/s2 CNAME records.",
-                )
-            )
+        )
 
-    # Link branding hostnames are customer-specific. Probe only a tiny common set
-    # with a short timeout so scans stay fast on slow/blocked DNS networks.
+    # Link branding is optional and hostnames vary — only note when we find a hit.
     link_hits: list[str] = []
     short = _resolver(nameserver, min(timeout, 2.0))
     candidates = [f"url1000.{domain}", f"em1000.{domain}", f"links.{domain}"]
@@ -562,26 +624,6 @@ def check_sendgrid(
                 message="; ".join(link_hits[:5]),
             )
         )
-    else:
-        findings.append(
-            Finding(
-                category="sendgrid",
-                title="SendGrid link branding",
-                status=FindingStatus.INFO,
-                message="No common link-branding CNAMEs detected (optional; hostnames vary per SendGrid setup).",
-                recommendation="In SendGrid → Sender Authentication → Link Branding, copy the exact CNAMEs provided.",
-            )
-        )
-
-    findings.append(
-        Finding(
-            category="sendgrid",
-            title="SendGrid reverse DNS",
-            status=FindingStatus.INFO,
-            message="PTR/rDNS for SendGrid shared IPs is managed by SendGrid; for dedicated IPs set PTR at your host.",
-            recommendation="In SendGrid, complete reverse DNS for any dedicated IP.",
-        )
-    )
 
     return findings
 
@@ -591,10 +633,20 @@ def check_email(
     dkim_selectors: str = "s1,s2,em,default",
     nameserver: Optional[str] = None,
     timeout: float = 10.0,
-    probe_smtp: bool = True,
+    probe_smtp: bool = False,
 ) -> dict[str, Any]:
-    """Run full email authentication suite for a domain."""
-    domain = domain.strip().lower().rstrip(".")
+    """
+    Email authentication suite.
+
+    Always queries the registrable domain (eTLD+1), same as WHOIS — so
+    www.example.com is checked as example.com. SPF/DKIM/DMARC/MX live on the
+    mail domain, not the www hostname.
+
+    SPF/DKIM/DMARC/MX are only treated as problems when that domain looks like it
+    handles mail (has MX and/or SPF). Website-only domains are not nagged.
+    """
+    input_host = domain.strip().lower().rstrip(".")
+    domain = registrable_domain(input_host) or input_host
     selectors = [s.strip() for s in dkim_selectors.split(",") if s.strip()]
 
     apex = _txt_lookup(domain, nameserver, timeout)
@@ -608,13 +660,51 @@ def check_email(
             "status": HealthStatus.UNKNOWN,
             "findings": [finding],
             "probe_ok": False,
-            "raw": {"probe_failed": True, "error": apex["error"]},
+            "raw": {
+                "probe_failed": True,
+                "error": apex["error"],
+                "input_host": input_host,
+                "queried_domain": domain,
+            },
+        }
+
+    mx = check_mx(domain, nameserver=nameserver, timeout=timeout)
+    spf_records = [t for t in apex["records"] if t.lower().startswith("v=spf1")]
+    has_mx = bool(mx.get("records"))
+    has_spf = bool(spf_records)
+    mail_active = has_mx or has_spf
+
+    # Brochure / CDN / docs sites with no mail — don't invent email homework.
+    if mx.get("probe_ok", True) and not mail_active:
+        findings = [
+            Finding(
+                category="mx",
+                title="Email not used on this domain",
+                status=FindingStatus.INFO,
+                message=(
+                    "No MX or SPF found. Fine if this domain only hosts a website — "
+                    "SPF/DKIM/DMARC are not required."
+                ),
+            )
+        ]
+        return {
+            "status": HealthStatus.HEALTHY,
+            "findings": findings,
+            "probe_ok": True,
+            "raw": {
+                "spf": [],
+                "dkim_selectors_found": [],
+                "dmarc": None,
+                "mx": [],
+                "mail_active": False,
+                "input_host": input_host,
+                "queried_domain": domain,
+            },
         }
 
     spf = parse_spf(apex["records"])
     dkim = check_dkim(domain, selectors, nameserver=nameserver, timeout=timeout)
     dmarc = check_dmarc(domain, nameserver=nameserver, timeout=timeout)
-    mx = check_mx(domain, nameserver=nameserver, timeout=timeout)
 
     findings: list[Finding] = []
     findings.extend(spf["findings"])
@@ -622,11 +712,33 @@ def check_email(
     findings.extend(dmarc["findings"])
     findings.extend(mx["findings"])
 
-    # Only run SMTP / SendGrid extras when MX DNS itself was reachable.
-    if probe_smtp and mx.get("probe_ok", True):
+    # SPF without MX: outbound/auth still matters; missing MX is not an outage.
+    if has_spf and not has_mx and mx.get("probe_ok", True):
+        findings = [
+            (
+                Finding(
+                    category=f.category,
+                    title=f.title,
+                    status=FindingStatus.INFO,
+                    message=(
+                        f.message
+                        + " (optional if this domain only sends mail, not receives it)"
+                    ),
+                    recommendation=f.recommendation,
+                    details=f.details,
+                )
+                if f.category == "mx" and f.status == FindingStatus.MISSING
+                else f
+            )
+            for f in findings
+        ]
+
+    # Only run SMTP extras when there are MX hosts to probe.
+    if probe_smtp and mx.get("probe_ok", True) and has_mx:
         hosts = [r.value for r in mx.get("records", [])]
         findings.extend(check_smtp_ports(hosts, timeout=min(timeout, 5.0)))
 
+    # SendGrid only when the domain already shows SendGrid hints.
     if mx.get("probe_ok", True) and dkim.get("probe_ok", True):
         findings.extend(
             check_sendgrid(
@@ -635,14 +747,6 @@ def check_email(
                 dkim_found=dkim.get("found_selectors", []),
                 nameserver=nameserver,
                 timeout=timeout,
-            )
-        )
-    else:
-        findings.append(
-            probe_failed_finding(
-                "sendgrid",
-                "SendGrid checks skipped",
-                "DNS probe was unreliable, so SendGrid records were not judged missing.",
             )
         )
 
@@ -659,5 +763,8 @@ def check_email(
             "dkim_selectors_found": dkim.get("found_selectors"),
             "dmarc": dmarc.get("record"),
             "mx": [r.value for r in mx.get("records", [])],
+            "mail_active": True,
+            "input_host": input_host,
+            "queried_domain": domain,
         },
     }

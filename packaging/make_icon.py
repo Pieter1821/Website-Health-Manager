@@ -70,13 +70,24 @@ def with_white_bg(im: Image.Image) -> Image.Image:
     return bg
 
 
-def square_pad(im: Image.Image, pad_ratio: float = 0.12) -> Image.Image:
+def square_fit(im: Image.Image, fill: float = 0.94) -> Image.Image:
+    """
+    Place artwork on a square canvas so it fills most of the icon.
+
+    Windows taskbar / Chrome app icons shrink tiny logos with heavy padding —
+    keep only a thin margin (~3% each side at fill=0.94).
+    """
+    fill = min(0.98, max(0.7, fill))
     sw, sh = im.size
+    # Scale so the longer side becomes `fill` of the final square.
     side = max(sw, sh)
-    pad = int(side * pad_ratio)
-    canvas_side = side + pad * 2
+    canvas_side = max(1, int(round(side / fill)))
+    target = int(round(canvas_side * fill))
+    scale = target / side
+    nw, nh = max(1, int(round(sw * scale))), max(1, int(round(sh * scale)))
+    scaled = im.resize((nw, nh), Image.Resampling.LANCZOS)
     canvas = Image.new("RGBA", (canvas_side, canvas_side), (255, 255, 255, 0))
-    canvas.paste(im, ((canvas_side - sw) // 2, (canvas_side - sh) // 2), im)
+    canvas.paste(scaled, ((canvas_side - nw) // 2, (canvas_side - nh) // 2), scaled)
     return canvas
 
 
@@ -86,17 +97,24 @@ def main() -> None:
     sep = find_text_separator(trimmed)
     tw, _ = trimmed.size
     shield = trim(trimmed.crop((0, 0, tw, sep)))
-    icon_master = with_white_bg(square_pad(shield, pad_ratio=0.14))
+    # Slight extra trim after crop removes leftover white fringe.
+    shield = trim(shield)
+    # Fill almost the whole tile so taskbar / Chrome app icons read large.
+    icon_master = with_white_bg(square_fit(shield, fill=0.97))
 
-    # Pillow builds all requested sizes from one master image.
-    icon_master.save(OUT_ICO, format="ICO", sizes=SIZES)
+    # Normalize to 512² master so every ICO/PNG size scales cleanly.
+    master_512 = icon_master.resize((512, 512), Image.Resampling.LANCZOS)
+    master_256 = master_512.resize((256, 256), Image.Resampling.LANCZOS)
+    master_256.save(OUT_ICO, format="ICO", sizes=SIZES)
 
     WEB.mkdir(parents=True, exist_ok=True)
     parent = Path(__file__).resolve().parent
-    icon_master.resize((256, 256), Image.Resampling.LANCZOS).save(parent / "whm-icon-256.png")
+    master_256.save(parent / "whm-icon-256.png")
+    master_512.save(parent / "whm-icon-512.png")
     trimmed.save(parent / "logo-full.png")
-    icon_master.save(WEB / "favicon.ico", format="ICO", sizes=[(16, 16), (32, 32), (48, 48)])
-    icon_master.resize((192, 192), Image.Resampling.LANCZOS).save(WEB / "icon-192.png")
+    master_256.save(WEB / "favicon.ico", format="ICO", sizes=[(16, 16), (32, 32), (48, 48)])
+    master_512.resize((192, 192), Image.Resampling.LANCZOS).save(WEB / "icon-192.png")
+    master_512.save(WEB / "icon-512.png")
 
     verify = Image.open(OUT_ICO)
     print(f"Wrote {OUT_ICO} ({OUT_ICO.stat().st_size} bytes)")

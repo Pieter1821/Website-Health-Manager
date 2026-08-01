@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import threading
 import tkinter as tk
-import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Optional
@@ -13,7 +12,7 @@ from typing import Optional
 from whm.application.scheduler import SchedulerService
 from whm.application.services import HealthScanService, SettingsService, WebsiteService
 from whm.domain.models import Finding, HealthCheckResult, HealthStatus, Website
-from whm.infrastructure.reports import default_export_paths, export_csv, export_html, export_json
+from whm.infrastructure.reports import save_report_to_downloads
 from whm.presentation.copy import (
     category_plain,
     finding_plain,
@@ -82,7 +81,7 @@ class WebsiteHealthApp(ttk.Frame):
         ttk.Button(bar, text="Help", command=self.show_help).pack(side=tk.RIGHT, padx=2)
         ttk.Label(
             self,
-            text="Find out why a website or email is not working — in plain English.",
+            text="Find out why a website is not working — in plain English.",
             style="Subheader.TLabel",
         ).pack(anchor=tk.W, pady=(0, 10))
 
@@ -142,7 +141,7 @@ class WebsiteHealthApp(ttk.Frame):
         body.add(left, weight=3)
         body.add(right, weight=2)
 
-        columns = ("name", "overall", "website", "ssl", "domain", "dns", "email", "checked")
+        columns = ("name", "overall", "website", "ssl", "domain", "dns", "checked")
         self.tree = ttk.Treeview(left, columns=columns, show="headings", selectmode="browse")
         headings = {
             "name": "Website",
@@ -151,7 +150,6 @@ class WebsiteHealthApp(ttk.Frame):
             "ssl": "Certificate",
             "domain": "Domain",
             "dns": "Address settings",
-            "email": "Email",
             "checked": "Last checked",
         }
         widths = {
@@ -161,7 +159,6 @@ class WebsiteHealthApp(ttk.Frame):
             "ssl": 110,
             "domain": 110,
             "dns": 120,
-            "email": 110,
             "checked": 130,
         }
         for col in columns:
@@ -238,16 +235,23 @@ class WebsiteHealthApp(ttk.Frame):
 
     def _row_values(self, site: Website, latest: Optional[HealthCheckResult]) -> tuple:
         if latest is None:
-            return (site.display_name, "Not checked yet", "—", "—", "—", "—", "—", "Never")
+            return (site.display_name, "Not checked yet", "—", "—", "—", "—", "Never")
+        from whm.domain.status import site_facing_status
+
         checked = latest.checked_at.strftime("%Y-%m-%d %H:%M") if latest.checked_at else "—"
+        overall = site_facing_status(
+            latest.website_status,
+            latest.ssl_status,
+            latest.domain_status,
+            latest.dns_status,
+        )
         return (
             site.display_name,
-            status_text(latest.overall_status),
+            status_text(overall),
             status_text(latest.website_status),
             status_text(latest.ssl_status),
             status_text(latest.domain_status),
             status_text(latest.dns_status),
-            status_text(latest.email_status),
             checked,
         )
 
@@ -274,12 +278,15 @@ class WebsiteHealthApp(ttk.Frame):
                 self.history_tree.delete(row)
             return
 
-        color = STATUS_COLORS.get(latest.overall_status, "#475467")
+        from whm.domain.status import display_overall, status_to_risk
+
+        overall = display_overall(latest)
+        color = STATUS_COLORS.get(overall, "#475467")
         self.detail_summary.configure(
             text=(
                 f"{site.display_name}  ·  {site.domain}\n"
-                f"{overall_summary(latest.overall_status, site.display_name)}\n"
-                f"Risk: {risk_plain(latest.risk_level)}"
+                f"{overall_summary(overall, site.display_name)}\n"
+                f"Risk: {risk_plain(status_to_risk(overall))}"
             ),
             foreground=color,
         )
@@ -292,8 +299,10 @@ class WebsiteHealthApp(ttk.Frame):
     ) -> str:
         if not findings:
             return "No details yet."
+        from whm.domain.status import display_overall
+
         lines = [
-            f"Overall: {status_plain(result.overall_status)}",
+            f"Overall: {status_plain(display_overall(result))}",
             "",
             "Below is each check, with what it means and what to do next.",
             "",
@@ -320,13 +329,15 @@ class WebsiteHealthApp(ttk.Frame):
         return "\n".join(lines).strip() + "\n"
 
     def _load_history(self, website_id: int) -> None:
+        from whm.domain.status import display_overall
+
         for row in self.history_tree.get_children():
             self.history_tree.delete(row)
         for item in self.scans.history(website_id, limit=30):
             when = item.checked_at.strftime("%Y-%m-%d %H:%M:%S")
             ms = f"{item.response_time_ms:.0f}" if item.response_time_ms is not None else "—"
             self.history_tree.insert(
-                "", tk.END, values=(when, status_text(item.overall_status), ms)
+                "", tk.END, values=(when, status_text(display_overall(item)), ms)
             )
 
     def _load_dns_changes(self, website_id: int) -> None:
@@ -453,12 +464,12 @@ class WebsiteHealthApp(ttk.Frame):
         error: Optional[str],
     ) -> None:
         if error:
-            self.status_var.set("Check failed")
+            self.status_var.set("Check didn’t finish")
             messagebox.showerror(
-                "Check failed",
-                "Something went wrong while checking.\n\n"
+                "Check didn’t finish",
+                "The check couldn’t complete.\n\n"
                 f"{error}\n\n"
-                "If your internet is unstable, try again on a better connection.",
+                "If your internet is unsteady, try again on a better connection.",
             )
             return
         assert result is not None
@@ -489,29 +500,13 @@ class WebsiteHealthApp(ttk.Frame):
             messagebox.showinfo("Nothing to save", "Check the website first, then save a report.")
             return
 
-        export_dir = Path(self.settings.get("export_folder", "exports"))
-        if not export_dir.is_absolute():
-            export_dir = Path.cwd() / export_dir
-        paths = default_export_paths(export_dir, site)
-        folder = filedialog.askdirectory(
-            initialdir=str(export_dir),
-            title="Choose folder for the report files",
-        )
-        if not folder:
-            return
-        out = Path(folder)
-        written = [
-            export_json(out / paths["json"].name, site, latest),
-            export_csv(out / paths["csv"].name, site, latest),
-            export_html(out / paths["html"].name, site, latest),
-        ]
-        self.status_var.set(f"Saved {len(written)} report files")
-        if messagebox.askyesno(
+        excel_path = save_report_to_downloads(site, latest, format="excel")
+        csv_path = save_report_to_downloads(site, latest, format="csv")
+        self.status_var.set("Saved Excel + CSV to Downloads")
+        messagebox.showinfo(
             "Report saved",
-            "Saved JSON, CSV, and HTML reports.\n\n"
-            "Open the HTML report now? (You can print it to PDF from your browser.)",
-        ):
-            webbrowser.open(written[2].as_uri())
+            f"Saved to your Downloads folder:\n{excel_path.name}\n{csv_path.name}",
+        )
 
     def open_settings(self) -> None:
         dialog = tk.Toplevel(self.master)
@@ -522,24 +517,12 @@ class WebsiteHealthApp(ttk.Frame):
         frm = ttk.Frame(dialog, padding=16)
         frm.pack(fill=tk.BOTH, expand=True)
 
+        from whm.presentation.settings_fields import SETTINGS_FIELDS
+
         current = self.settings.get_all()
         fields: dict[str, tk.StringVar] = {
-            "timeout_seconds": tk.StringVar(value=current.get("timeout_seconds", "10")),
-            "dns_server": tk.StringVar(value=current.get("dns_server", "")),
-            "check_interval": tk.StringVar(value=current.get("check_interval", "manual")),
-            "notify_on": tk.StringVar(value=current.get("notify_on", "critical")),
-            "notify_desktop": tk.StringVar(value=current.get("notify_desktop", "1")),
-            "export_folder": tk.StringVar(value=current.get("export_folder", "exports")),
-            "slack_webhook": tk.StringVar(value=current.get("slack_webhook", "")),
-            "discord_webhook": tk.StringVar(value=current.get("discord_webhook", "")),
-            "teams_webhook": tk.StringVar(value=current.get("teams_webhook", "")),
-            "generic_webhook": tk.StringVar(value=current.get("generic_webhook", "")),
-            "smtp_host": tk.StringVar(value=current.get("smtp_host", "")),
-            "smtp_port": tk.StringVar(value=current.get("smtp_port", "587")),
-            "smtp_username": tk.StringVar(value=current.get("smtp_username", "")),
-            "smtp_password": tk.StringVar(value=current.get("smtp_password", "")),
-            "mail_from": tk.StringVar(value=current.get("mail_from", "")),
-            "mail_to": tk.StringVar(value=current.get("mail_to", "")),
+            key: tk.StringVar(value=current.get(key, ""))
+            for key, _label, _tip, _hint in SETTINGS_FIELDS
         }
 
         canvas = tk.Canvas(frm, highlightthickness=0)
@@ -551,44 +534,20 @@ class WebsiteHealthApp(ttk.Frame):
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        def add_section(title: str) -> None:
-            ttk.Label(inner, text=title, style="Header.TLabel").pack(anchor=tk.W, pady=(12, 4))
-
-        def add_field(label: str, key: str, hint: str = "") -> None:
-            ttk.Label(inner, text=label).pack(anchor=tk.W, pady=(6, 0))
+        def add_field(label: str, key: str, tip: str = "", hint: str = "") -> None:
+            ttk.Label(inner, text=label).pack(anchor=tk.W, pady=(10, 0))
             ttk.Entry(inner, textvariable=fields[key], width=64).pack(fill=tk.X)
+            if tip:
+                ttk.Label(inner, text=tip, style="Hint.TLabel", wraplength=460).pack(
+                    anchor=tk.W, pady=(2, 0)
+                )
             if hint:
-                ttk.Label(inner, text=hint, style="Hint.TLabel").pack(anchor=tk.W)
+                ttk.Label(inner, text=hint, style="Hint.TLabel", wraplength=460).pack(
+                    anchor=tk.W
+                )
 
-        add_section("General")
-        add_field("Wait time (seconds)", "timeout_seconds", "Increase if your internet is slow.")
-        add_field("DNS server (optional)", "dns_server", "Leave blank to use your computer's DNS.")
-        add_field(
-            "Automatic checks for all sites",
-            "check_interval",
-            "manual | hourly | every_6_hours | daily | weekly",
-        )
-        add_field("Report folder", "export_folder")
-
-        add_section("Alerts")
-        add_field(
-            "When to alert",
-            "notify_on",
-            "critical = only serious problems · warning · always · never",
-        )
-        add_field("Windows desktop alerts (1=yes, 0=no)", "notify_desktop")
-        add_field("Slack webhook URL", "slack_webhook")
-        add_field("Discord webhook URL", "discord_webhook")
-        add_field("Microsoft Teams webhook URL", "teams_webhook")
-        add_field("Generic webhook URL", "generic_webhook")
-
-        add_section("Email alerts (optional)")
-        add_field("SMTP host", "smtp_host")
-        add_field("SMTP port", "smtp_port")
-        add_field("SMTP username", "smtp_username")
-        add_field("SMTP password", "smtp_password")
-        add_field("From address", "mail_from")
-        add_field("To address", "mail_to")
+        for key, label, tip, hint in SETTINGS_FIELDS:
+            add_field(label, key, tip=tip, hint=hint)
 
         def save() -> None:
             for key, var in fields.items():
@@ -605,8 +564,8 @@ class WebsiteHealthApp(ttk.Frame):
             "How to use Website Health Manager",
             "1) Type a website in Quick check and click Check now.\n"
             "2) Wait for the results on the right.\n"
-            "3) Read the Results tab — green/OK is fine, Missing/Needs fixing should be corrected.\n"
+            "3) Read the Results tab — green/OK is fine; Review / Not set up items are worth fixing.\n"
             "4) Use Save report to create files you can send to a customer or developer.\n\n"
-            "If many items say Couldn't check, your Wi‑Fi may be unstable — try again later.\n\n"
+            "If many items say Couldn’t finish, try again on a steadier connection.\n\n"
             "Automatic checks and Slack/Teams/Discord alerts are in Settings.",
         )

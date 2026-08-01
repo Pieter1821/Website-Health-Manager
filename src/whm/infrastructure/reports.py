@@ -1,17 +1,61 @@
-"""Export health reports (Phase 5): JSON, CSV, HTML (print-to-PDF), ZIP download."""
+"""Export clear Excel or CSV health reports for support staff / customers."""
 
 from __future__ import annotations
 
 import csv
 import io
-import json
-import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
-from whm.domain.models import HealthCheckResult, Website
-from whm.presentation.copy import category_plain, finding_plain, status_plain
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+
+from whm.domain.models import FindingStatus, HealthCheckResult, Website
+from whm.presentation.copy import (
+    category_plain,
+    finding_plain,
+    overall_summary,
+    risk_plain,
+    status_plain,
+)
+
+_IGNORED_REPORT_CATEGORIES = frozenset(
+    {
+        "security",
+        "performance",
+        "smtp",
+        "spf",
+        "dkim",
+        "dmarc",
+        "mx",
+        "sendgrid",
+    }
+)
+_ACTION_STATUSES = frozenset(
+    {
+        FindingStatus.MISSING,
+        FindingStatus.INCORRECT,
+        FindingStatus.INCONCLUSIVE,
+    }
+)
+
+_HEADER_FILL = PatternFill("solid", fgColor="1B2430")
+_HEADER_FONT = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+_TITLE_FONT = Font(name="Calibri", bold=True, size=14, color="1B2430")
+_LABEL_FONT = Font(name="Calibri", bold=True, size=11, color="334155")
+_BODY_FONT = Font(name="Calibri", size=11, color="0F172A")
+_GOOD_FILL = PatternFill("solid", fgColor="D1FAE5")
+_WARN_FILL = PatternFill("solid", fgColor="FEF3C7")
+_BAD_FILL = PatternFill("solid", fgColor="FEE2E2")
+_MUTED_FILL = PatternFill("solid", fgColor="E2E8F0")
+_THIN = Border(
+    left=Side(style="thin", color="CBD5E1"),
+    right=Side(style="thin", color="CBD5E1"),
+    top=Side(style="thin", color="CBD5E1"),
+    bottom=Side(style="thin", color="CBD5E1"),
+)
+_WRAP = Alignment(wrap_text=True, vertical="top")
 
 
 def _safe_name(domain: str) -> str:
@@ -23,173 +67,523 @@ def _report_base_name(website: Website) -> str:
     return f"{_safe_name(website.domain)}-{stamp}"
 
 
-_IGNORED_REPORT_CATEGORIES = frozenset({"security", "performance"})
-
-
 def _report_findings(result: HealthCheckResult):
     return [f for f in result.findings if f.category not in _IGNORED_REPORT_CATEGORIES]
 
 
-def render_json(website: Website, result: HealthCheckResult) -> str:
-    payload: dict[str, Any] = {
-        "website": {
-            "name": website.display_name,
-            "domain": website.domain,
-            "url": website.url,
-        },
-        "checked_at": result.checked_at.isoformat(),
-        "overall": result.overall_status.value,
-        "risk": result.risk_level.value,
-        "findings": [
-            {
-                "area": f.category,
-                "title": f.title,
-                "status": f.status.value,
-                "message": f.message,
-                "recommendation": f.recommendation,
-            }
-            for f in _report_findings(result)
-        ],
-    }
-    return json.dumps(payload, indent=2)
+def _action_findings(result: HealthCheckResult):
+    return [f for f in _report_findings(result) if f.status in _ACTION_STATUSES]
+
+
+def _status_fill(label: str) -> PatternFill:
+    lower = label.lower()
+    if "looks good" in lower or lower == "ok" or lower == "low":
+        return _GOOD_FILL
+    if (
+        "worth a look" in lower
+        or "attention" in lower
+        or "needs fixing" in lower
+        or "review" in lower
+        or "medium" in lower
+    ):
+        return _WARN_FILL
+    if (
+        "needs a fix" in lower
+        or "wrong" in lower
+        or "missing" in lower
+        or "not set up" in lower
+        or "high" in lower
+    ):
+        return _BAD_FILL
+    return _MUTED_FILL
+
+
+def _set_widths(ws, widths: list[float]) -> None:
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+
+def _style_header_row(ws, row: int, columns: int) -> None:
+    for col in range(1, columns + 1):
+        cell = ws.cell(row=row, column=col)
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+        cell.border = _THIN
+
+
+def _write_kv(ws, row: int, label: str, value: str, *, colour_value: bool = False) -> int:
+    label_cell = ws.cell(row=row, column=1, value=label)
+    label_cell.font = _LABEL_FONT
+    label_cell.alignment = _WRAP
+    label_cell.border = _THIN
+    value_cell = ws.cell(row=row, column=2, value=value)
+    value_cell.font = _BODY_FONT
+    value_cell.alignment = _WRAP
+    value_cell.border = _THIN
+    if colour_value:
+        value_cell.fill = _status_fill(value)
+    return row + 1
+
+
+def render_excel(website: Website, result: HealthCheckResult) -> bytes:
+    """Build a two-sheet .xlsx: Summary + Problems to fix."""
+    wb = Workbook()
+
+    summary = wb.active
+    summary.title = "Summary"
+    summary["A1"] = "Website Health Manager — Report"
+    summary["A1"].font = _TITLE_FONT
+    summary.merge_cells("A1:B1")
+
+    row = 3
+    row = _write_kv(summary, row, "Website", website.display_name)
+    row = _write_kv(summary, row, "Domain", website.domain)
+    row = _write_kv(summary, row, "URL", website.url)
+    row = _write_kv(
+        summary,
+        row,
+        "Checked at",
+        result.checked_at.strftime("%Y-%m-%d %H:%M UTC"),
+    )
+    row = _write_kv(
+        summary,
+        row,
+        "Overall",
+        status_plain(result.overall_status),
+        colour_value=True,
+    )
+    row = _write_kv(
+        summary,
+        row,
+        "Risk",
+        risk_plain(result.risk_level),
+        colour_value=True,
+    )
+    row += 1
+    summary.cell(row=row, column=1, value="Area scores").font = _TITLE_FONT
+    row += 1
+    for label, status in (
+        ("Website opens", result.website_status),
+        ("Security certificate (SSL)", result.ssl_status),
+        ("Domain registration", result.domain_status),
+        ("Web address settings (DNS)", result.dns_status),
+    ):
+        row = _write_kv(
+            summary,
+            row,
+            label,
+            status_plain(status),
+            colour_value=True,
+        )
+
+    row += 1
+    row = _write_kv(
+        summary,
+        row,
+        "In plain words",
+        overall_summary(result.overall_status, website.display_name),
+    )
+    actions = _action_findings(result)
+    row = _write_kv(
+        summary,
+        row,
+        "Items to fix",
+        str(len(actions)),
+    )
+    _set_widths(summary, [34, 72])
+    summary.row_dimensions[1].height = 22
+    for r in range(3, row):
+        summary.row_dimensions[r].height = 28
+    summary.freeze_panes = "A3"
+
+    problems = wb.create_sheet("Problems to fix")
+    headers = ["Area", "Status", "Problem", "Details", "What to do"]
+    for col, header in enumerate(headers, start=1):
+        problems.cell(row=1, column=col, value=header)
+    _style_header_row(problems, 1, len(headers))
+
+    if not actions:
+        problems.cell(
+            row=2,
+            column=1,
+            value="Nothing to fix — everything we checked looks fine.",
+        )
+        problems.merge_cells("A2:E2")
+        problems["A2"].font = _BODY_FONT
+        problems["A2"].fill = _GOOD_FILL
+        problems["A2"].alignment = _WRAP
+    else:
+        for idx, finding in enumerate(actions, start=2):
+            values = [
+                category_plain(finding.category),
+                finding_plain(finding.status),
+                finding.title,
+                finding.message,
+                finding.recommendation or "Ask the hosting provider to fix this.",
+            ]
+            for col, value in enumerate(values, start=1):
+                cell = problems.cell(row=idx, column=col, value=value)
+                cell.font = _BODY_FONT
+                cell.alignment = _WRAP
+                cell.border = _THIN
+                if col == 2:
+                    cell.fill = _status_fill(str(value))
+            problems.row_dimensions[idx].height = max(36, 18 * (1 + len(values[3]) // 60))
+
+    _set_widths(problems, [28, 14, 28, 44, 44])
+    problems.auto_filter.ref = f"A1:E{max(2, len(actions) + 1)}"
+    problems.freeze_panes = "A2"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
 
 
 def render_csv(website: Website, result: HealthCheckResult) -> str:
+    """Flat, readable CSV: summary rows, then problems to fix."""
+    handle = io.StringIO()
+    writer = csv.writer(handle)
+    writer.writerow(["Section", "Field", "Value"])
+    writer.writerow(["Summary", "Website", website.display_name])
+    writer.writerow(["Summary", "Domain", website.domain])
+    writer.writerow(["Summary", "URL", website.url])
+    writer.writerow(
+        ["Summary", "Checked at", result.checked_at.strftime("%Y-%m-%d %H:%M UTC")]
+    )
+    writer.writerow(["Summary", "Overall", status_plain(result.overall_status)])
+    writer.writerow(["Summary", "Risk", risk_plain(result.risk_level)])
+    writer.writerow(
+        ["Summary", "Website opens", status_plain(result.website_status)]
+    )
+    writer.writerow(
+        [
+            "Summary",
+            "Security certificate (SSL)",
+            status_plain(result.ssl_status),
+        ]
+    )
+    writer.writerow(
+        ["Summary", "Domain registration", status_plain(result.domain_status)]
+    )
+    writer.writerow(
+        [
+            "Summary",
+            "Web address settings (DNS)",
+            status_plain(result.dns_status),
+        ]
+    )
+    writer.writerow(
+        [
+            "Summary",
+            "In plain words",
+            overall_summary(result.overall_status, website.display_name),
+        ]
+    )
+
+    writer.writerow([])
+    writer.writerow(["Area", "Status", "Problem", "Details", "What to do"])
+    actions = _action_findings(result)
+    if not actions:
+        writer.writerow(
+            [
+                "",
+                "",
+                "Nothing to fix",
+                "Everything we checked looks fine.",
+                "",
+            ]
+        )
+    else:
+        for finding in actions:
+            writer.writerow(
+                [
+                    category_plain(finding.category),
+                    finding_plain(finding.status),
+                    finding.title,
+                    finding.message,
+                    finding.recommendation
+                    or "Ask the hosting provider to fix this.",
+                ]
+            )
+    return handle.getvalue()
+
+
+def export_excel(path: Path, website: Website, result: HealthCheckResult) -> Path:
+    path.write_bytes(render_excel(website, result))
+    return path
+
+
+def export_csv(path: Path, website: Website, result: HealthCheckResult) -> Path:
+    path.write_text(render_csv(website, result), encoding="utf-8-sig")
+    return path
+
+
+def build_excel_report(website: Website, result: HealthCheckResult) -> tuple[str, bytes]:
+    base = _report_base_name(website)
+    return f"{base}-report.xlsx", render_excel(website, result)
+
+
+def build_csv_report(website: Website, result: HealthCheckResult) -> tuple[str, bytes]:
+    base = _report_base_name(website)
+    return f"{base}-report.csv", render_csv(website, result).encode("utf-8-sig")
+
+
+def downloads_folder() -> Path:
+    """User Downloads folder (Windows-friendly), creating it if needed."""
+    home = Path.home()
+    candidates = [
+        home / "Downloads",
+        Path.home() / "OneDrive" / "Downloads",
+    ]
+    for path in candidates:
+        if path.is_dir():
+            return path
+    target = home / "Downloads"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def save_report_to_downloads(
+    website: Website,
+    result: HealthCheckResult,
+    *,
+    format: str = "excel",
+) -> Path:
+    """Write Excel or CSV straight into the user's Downloads folder."""
+    fmt = (format or "excel").strip().lower()
+    if fmt == "csv":
+        filename, payload = build_csv_report(website, result)
+    else:
+        filename, payload = build_excel_report(website, result)
+    path = downloads_folder() / filename
+    path.write_bytes(payload)
+    return path
+
+
+def render_portfolio_excel(
+    rows: list[tuple[Website, HealthCheckResult | None]],
+) -> bytes:
+    """All-websites workbook: Overview + Problems across the portfolio."""
+    wb = Workbook()
+    overview = wb.active
+    overview.title = "Overview"
+    overview["A1"] = "Website Health Manager — All websites"
+    overview["A1"].font = _TITLE_FONT
+    overview.merge_cells("A1:I1")
+
+    headers = [
+        "Website",
+        "Domain",
+        "Overall",
+        "Web",
+        "SSL",
+        "Domain reg.",
+        "DNS",
+        "Last checked",
+        "Items to fix",
+    ]
+    for col, header in enumerate(headers, start=1):
+        overview.cell(row=3, column=col, value=header)
+    _style_header_row(overview, 3, len(headers))
+
+    problems = wb.create_sheet("Problems to fix")
+    problem_headers = ["Website", "Domain", "Area", "Status", "Problem", "Details", "What to do"]
+    for col, header in enumerate(problem_headers, start=1):
+        problems.cell(row=1, column=col, value=header)
+    _style_header_row(problems, 1, len(problem_headers))
+
+    problem_row = 2
+    total_actions = 0
+    for idx, (site, result) in enumerate(rows, start=4):
+        if result is None:
+            values = [
+                site.display_name,
+                site.domain,
+                "Not checked yet",
+                "—",
+                "—",
+                "—",
+                "—",
+                "Never",
+                "0",
+            ]
+        else:
+            actions = _action_findings(result)
+            total_actions += len(actions)
+            values = [
+                site.display_name,
+                site.domain,
+                status_plain(result.overall_status),
+                status_plain(result.website_status),
+                status_plain(result.ssl_status),
+                status_plain(result.domain_status),
+                status_plain(result.dns_status),
+                result.checked_at.strftime("%Y-%m-%d %H:%M"),
+                str(len(actions)),
+            ]
+            for finding in actions:
+                prow = [
+                    site.display_name,
+                    site.domain,
+                    category_plain(finding.category),
+                    finding_plain(finding.status),
+                    finding.title,
+                    finding.message,
+                    finding.recommendation
+                    or "Ask the hosting provider to fix this.",
+                ]
+                for col, value in enumerate(prow, start=1):
+                    cell = problems.cell(row=problem_row, column=col, value=value)
+                    cell.font = _BODY_FONT
+                    cell.alignment = _WRAP
+                    cell.border = _THIN
+                    if col == 4:
+                        cell.fill = _status_fill(str(value))
+                problem_row += 1
+
+        for col, value in enumerate(values, start=1):
+            cell = overview.cell(row=idx, column=col, value=value)
+            cell.font = _BODY_FONT
+            cell.alignment = _WRAP
+            cell.border = _THIN
+            if col in {3, 4, 5, 6, 7}:
+                cell.fill = _status_fill(str(value))
+
+    if problem_row == 2:
+        problems.cell(
+            row=2,
+            column=1,
+            value="Nothing to fix across the checked websites.",
+        )
+        problems.merge_cells("A2:G2")
+        problems["A2"].font = _BODY_FONT
+        problems["A2"].fill = _GOOD_FILL
+
+    overview.cell(row=2, column=1, value=f"Sites: {len(rows)} · Items to fix: {total_actions}")
+    overview["A2"].font = _BODY_FONT
+    _set_widths(overview, [22, 22, 14, 12, 12, 14, 12, 16, 12])
+    _set_widths(problems, [22, 22, 22, 12, 26, 40, 40])
+    overview.freeze_panes = "A4"
+    problems.freeze_panes = "A2"
+    problems.auto_filter.ref = f"A1:G{max(2, problem_row - 1)}"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def render_portfolio_csv(
+    rows: list[tuple[Website, HealthCheckResult | None]],
+) -> str:
     handle = io.StringIO()
     writer = csv.writer(handle)
     writer.writerow(
         [
             "Website",
             "Domain",
-            "Checked at",
             "Overall",
-            "Area",
-            "Title",
-            "Status",
-            "Message",
-            "What to do",
+            "Web",
+            "SSL",
+            "Domain reg.",
+            "DNS",
+            "Last checked",
+            "Items to fix",
         ]
     )
-    for finding in _report_findings(result):
+    for site, result in rows:
+        if result is None:
+            writer.writerow(
+                [
+                    site.display_name,
+                    site.domain,
+                    "Not checked yet",
+                    "—",
+                    "—",
+                    "—",
+                    "—",
+                    "Never",
+                    "0",
+                ]
+            )
+        else:
+            actions = _action_findings(result)
+            writer.writerow(
+                [
+                    site.display_name,
+                    site.domain,
+                    status_plain(result.overall_status),
+                    status_plain(result.website_status),
+                    status_plain(result.ssl_status),
+                    status_plain(result.domain_status),
+                    status_plain(result.dns_status),
+                    result.checked_at.strftime("%Y-%m-%d %H:%M"),
+                    str(len(actions)),
+                ]
+            )
+
+    writer.writerow([])
+    writer.writerow(
+        ["Website", "Domain", "Area", "Status", "Problem", "Details", "What to do"]
+    )
+    any_problems = False
+    for site, result in rows:
+        if result is None:
+            continue
+        for finding in _action_findings(result):
+            any_problems = True
+            writer.writerow(
+                [
+                    site.display_name,
+                    site.domain,
+                    category_plain(finding.category),
+                    finding_plain(finding.status),
+                    finding.title,
+                    finding.message,
+                    finding.recommendation
+                    or "Ask the hosting provider to fix this.",
+                ]
+            )
+    if not any_problems:
         writer.writerow(
-            [
-                website.display_name,
-                website.domain,
-                result.checked_at.isoformat(),
-                status_plain(result.overall_status),
-                category_plain(finding.category),
-                finding.title,
-                finding_plain(finding.status),
-                finding.message,
-                finding.recommendation,
-            ]
+            ["", "", "", "", "Nothing to fix", "Everything checked looks fine.", ""]
         )
     return handle.getvalue()
 
 
-def render_html(website: Website, result: HealthCheckResult) -> str:
-    """Editorial HTML report — open in a browser and Print → Save as PDF."""
-    rows = []
-    for finding in _report_findings(result):
-        rows.append(
-            "<tr>"
-            f"<td>{_e(category_plain(finding.category))}</td>"
-            f"<td><span class='pill {finding.status.value}'>{_e(finding_plain(finding.status))}</span></td>"
-            f"<td><strong>{_e(finding.title)}</strong><br><span class='dim'>{_e(finding.message)}</span></td>"
-            f"<td>{_e(finding.recommendation)}</td>"
-            "</tr>"
-        )
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<title>WHM report — {_e(website.display_name)}</title>
-<style>
-:root {{
-  --ink:#0b0f14; --paper:#f3ebe2; --dim:#9a9086; --line:rgba(11,15,20,.12);
-  --signal:#1f9d6d; --warn:#b7791f; --crit:#c53030;
-}}
-* {{ box-sizing:border-box; }}
-body {{
-  margin:0; font-family:"Segoe UI", Bahnschrift, sans-serif;
-  color:var(--ink); background:
-    radial-gradient(1200px 600px at 10% -10%, #d9f5e8, transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, #f7e6c8, transparent 50%),
-    var(--paper);
-}}
-.wrap {{ max-width:980px; margin:0 auto; padding:3rem 1.5rem 4rem; }}
-.brand {{ font-family:Cambria, Georgia, serif; font-size:3.5rem; margin:0; letter-spacing:-.03em; }}
-.tag {{ color:var(--dim); margin:.4rem 0 1.6rem; }}
-h1 {{ font-family:Cambria, Georgia, serif; font-weight:500; font-size:2rem; margin:0 0 .4rem; }}
-.meta {{ color:var(--dim); margin-bottom:1.8rem; line-height:1.5; }}
-table {{ width:100%; border-collapse:collapse; background:rgba(255,255,255,.55); backdrop-filter:blur(8px); border-radius:18px; overflow:hidden; box-shadow:0 20px 50px rgba(11,15,20,.08); }}
-th, td {{ border-bottom:1px solid var(--line); padding:.85rem .9rem; text-align:left; vertical-align:top; }}
-th {{ font-size:.78rem; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); background:rgba(255,255,255,.5); }}
-.dim {{ color:#5c564f; }}
-.pill {{ display:inline-block; padding:.2rem .55rem; border-radius:999px; font-size:.75rem; }}
-.pill.correct,.pill.info {{ background:#def7ec; color:var(--signal); }}
-.pill.incorrect {{ background:#fef3c7; color:var(--warn); }}
-.pill.missing {{ background:#ffe4e1; color:var(--crit); }}
-.pill.inconclusive {{ background:#e8edf3; color:#4a5568; }}
-.foot {{ margin-top:1.4rem; color:var(--dim); font-size:.9rem; }}
-@media print {{ body {{ background:#fff; }} table {{ box-shadow:none; }} }}
-</style></head><body><div class="wrap">
-<p class="brand">WHM</p>
-<p class="tag">Know why it broke.</p>
-<h1>{_e(website.display_name)}</h1>
-<p class="meta">
-{_e(website.domain)} · Checked {result.checked_at.strftime("%Y-%m-%d %H:%M")} UTC<br>
-Overall: <strong>{_e(status_plain(result.overall_status))}</strong>
-</p>
-<table>
-<thead><tr><th>Area</th><th>Result</th><th>Details</th><th>What to do</th></tr></thead>
-<tbody>
-{"".join(rows)}
-</tbody></table>
-<p class="foot">Tip: Print → Save as PDF for a polished client-ready report.</p>
-</div></body></html>
-"""
+def build_portfolio_excel_report(
+    rows: list[tuple[Website, HealthCheckResult | None]],
+) -> tuple[str, bytes]:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"whm-all-websites-{stamp}.xlsx", render_portfolio_excel(rows)
 
 
-def export_json(path: Path, website: Website, result: HealthCheckResult) -> Path:
-    path.write_text(render_json(website, result), encoding="utf-8")
+def build_portfolio_csv_report(
+    rows: list[tuple[Website, HealthCheckResult | None]],
+) -> tuple[str, bytes]:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"whm-all-websites-{stamp}.csv", render_portfolio_csv(rows).encode("utf-8-sig")
+
+
+def save_portfolio_report_to_downloads(
+    rows: list[tuple[Website, HealthCheckResult | None]],
+    *,
+    format: str = "excel",
+) -> Path:
+    fmt = (format or "excel").strip().lower()
+    if fmt == "csv":
+        filename, payload = build_portfolio_csv_report(rows)
+    else:
+        filename, payload = build_portfolio_excel_report(rows)
+    path = downloads_folder() / filename
+    path.write_bytes(payload)
     return path
-
-
-def export_csv(path: Path, website: Website, result: HealthCheckResult) -> Path:
-    path.write_text(render_csv(website, result), encoding="utf-8")
-    return path
-
-
-def export_html(path: Path, website: Website, result: HealthCheckResult) -> Path:
-    path.write_text(render_html(website, result), encoding="utf-8")
-    return path
-
-
-def build_report_bundle(website: Website, result: HealthCheckResult) -> tuple[str, bytes]:
-    """Build a ZIP (HTML + CSV + JSON) for browser download to the user's PC."""
-    base = _report_base_name(website)
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(f"{base}.html", render_html(website, result))
-        archive.writestr(f"{base}.csv", render_csv(website, result))
-        archive.writestr(f"{base}.json", render_json(website, result))
-    return f"{base}-report.zip", buffer.getvalue()
-
-
-def _e(value: str) -> str:
-    return (
-        str(value)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
 
 
 def default_export_paths(folder: Path, website: Website) -> dict[str, Path]:
     folder.mkdir(parents=True, exist_ok=True)
     base = _report_base_name(website)
     return {
-        "json": folder / f"{base}.json",
-        "csv": folder / f"{base}.csv",
-        "html": folder / f"{base}.html",
+        "excel": folder / f"{base}-report.xlsx",
+        "csv": folder / f"{base}-report.csv",
     }

@@ -25,7 +25,14 @@ def test_aggregate_ignores_inconclusive_when_real_issues_exist():
         probe_failed_finding("dns", "dns probe failed", "timeout"),
         Finding("spf", "SPF missing", FindingStatus.MISSING, "none"),
     ]
-    assert aggregate_status(findings) == HealthStatus.CRITICAL
+    # SPF gaps are amber (mail often still works); probe noise is ignored.
+    assert aggregate_status(findings) == HealthStatus.WARNING
+
+    mx_findings = [
+        probe_failed_finding("dns", "dns probe failed", "timeout"),
+        Finding("mx", "MX missing", FindingStatus.MISSING, "none"),
+    ]
+    assert aggregate_status(mx_findings) == HealthStatus.CRITICAL
 
 
 def test_aggregate_all_inconclusive_is_unknown():

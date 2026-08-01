@@ -61,6 +61,68 @@ def test_parse_csv_single_column():
     assert [r.url for r in rows] == ["example.com", "foo.co.za"]
 
 
+def test_skips_instruction_row_above_header():
+    data = (
+        b"Fill in one row per website below, then use Import list in WHM. "
+        b"Only Website name and URL are required - leave other cells blank\n"
+        b"Website name,URL\n"
+        b"Acme,https://www.example.com\n"
+        b"\n"
+        b"Contoso,https://contoso.org\n"
+        b"\n\n"
+    )
+    rows = parse_csv_bytes(data)
+    assert len(rows) == 2
+    assert rows[0].url == "https://www.example.com"
+    assert rows[0].display_name == "Acme"
+    assert rows[1].url == "https://contoso.org"
+    assert all("fill in" not in r.url.lower() for r in rows)
+    assert all("fill in" not in (r.display_name or "").lower() for r in rows)
+
+
+def test_blank_rows_are_not_errors():
+    from whm.infrastructure.importer import apply_import
+
+    class C:
+        def __init__(self, name):
+            self.id = 1
+
+    class W:
+        def __init__(self, domain):
+            self.domain = domain
+
+    data = b"Website name,URL\nAcme,https://www.example.com\n\n\n"
+    rows = parse_csv_bytes(data)
+    result = apply_import(
+        rows,
+        existing_domains=set(),
+        add_customer=lambda name: C(name),
+        add_website=lambda **kwargs: W("example.com"),
+        extract_domain=lambda url: "example.com",
+    )
+    assert result.errors == []
+    assert len(result.added) == 1
+
+
+def test_invalid_url_reports_row_number():
+    from whm.infrastructure.importer import ImportRow, apply_import
+
+    class C:
+        def __init__(self, name):
+            self.id = 1
+
+    result = apply_import(
+        [ImportRow(url="not a domain at all", source_line=4)],
+        existing_domains=set(),
+        add_customer=lambda name: C(name),
+        add_website=lambda **kwargs: None,
+        extract_domain=lambda url: (_ for _ in ()).throw(ValueError("bad")),
+    )
+    assert len(result.errors) == 1
+    assert "Row 4" in result.errors[0]
+    assert "Row 4" in result.summary
+
+
 def test_parse_xlsx_client_website_structure(tmp_path):
     import zipfile
 

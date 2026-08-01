@@ -294,6 +294,19 @@ def check_dns(
                 message=", ".join(r.value for r in by_type["NS"]),
             )
         )
+    elif by_type.get("A") or by_type.get("AAAA"):
+        # Subdomains and some resolvers omit NS at this label even when the site resolves.
+        findings.append(
+            Finding(
+                category="dns",
+                title="Name servers",
+                status=FindingStatus.INFO,
+                message=(
+                    "No NS list returned for this name — normal for many subdomains "
+                    "when the site still has address records."
+                ),
+            )
+        )
     else:
         findings.append(
             Finding(
@@ -320,6 +333,15 @@ def check_dns(
                 )
             )
 
+    dangling = _dangling_cname_findings(
+        by_type.get("CNAME", []),
+        nameserver=nameserver,
+        timeout=timeout,
+    )
+    findings.extend(dangling)
+    if any(f.status in {FindingStatus.MISSING, FindingStatus.INCORRECT} for f in dangling):
+        statuses.append(HealthStatus.CRITICAL)
+
     status = worst_status(statuses) if statuses else HealthStatus.UNKNOWN
     logger.info(
         "DNS settings result for %s: status=%s counts=%s",
@@ -335,8 +357,86 @@ def check_dns(
         "raw": {
             "domain": domain,
             "counts": {k: len(v) for k, v in by_type.items()},
+            "dangling_cname": [
+                f.details.get("target") for f in dangling if f.details.get("target")
+            ],
         },
     }
+
+
+def _dangling_cname_findings(
+    cnames: list[DnsRecord],
+    *,
+    nameserver: Optional[str],
+    timeout: float,
+) -> list[Finding]:
+    """
+    High-severity: CNAME target that no longer resolves (subdomain takeover risk).
+    Kept separate from generic 'DNS looks good'.
+    """
+    if not cnames:
+        return []
+    resolver = _make_resolver(nameserver, timeout)
+    out: list[Finding] = []
+    seen: set[str] = set()
+    for record in cnames:
+        target = (record.value or "").strip().lower().rstrip(".")
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        try:
+            resolver.resolve(target, "A")
+            continue
+        except dns.resolver.NXDOMAIN:
+            out.append(
+                Finding(
+                    category="dns",
+                    title="Dangling CNAME (takeover risk)",
+                    status=FindingStatus.MISSING,
+                    message=(
+                        f"{record.name} points to {target}, but that target no longer exists "
+                        "(NXDOMAIN). An attacker could claim the old service and hijack this subdomain."
+                    ),
+                    recommendation=(
+                        "Remove the CNAME, or recreate the service it pointed to "
+                        "(Heroku/S3/Azure/GitHub Pages/etc.)."
+                    ),
+                    details={"name": record.name, "target": target, "risk": "subdomain_takeover"},
+                )
+            )
+            continue
+        except dns.resolver.NoAnswer:
+            # No A — try AAAA before declaring dangling.
+            try:
+                resolver.resolve(target, "AAAA")
+                continue
+            except dns.resolver.NXDOMAIN:
+                out.append(
+                    Finding(
+                        category="dns",
+                        title="Dangling CNAME (takeover risk)",
+                        status=FindingStatus.MISSING,
+                        message=(
+                            f"{record.name} points to {target}, but that target no longer exists "
+                            "(NXDOMAIN)."
+                        ),
+                        recommendation=(
+                            "Remove the CNAME, or recreate the service it pointed to."
+                        ),
+                        details={
+                            "name": record.name,
+                            "target": target,
+                            "risk": "subdomain_takeover",
+                        },
+                    )
+                )
+                continue
+            except (dns.resolver.NoAnswer, dns.exception.DNSException):
+                continue
+        except dns.exception.DNSException:
+            # Probe noise — do not invent a takeover alert.
+            continue
+    return out
 
 
 def diff_dns_records(

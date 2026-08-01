@@ -11,6 +11,7 @@ from whm.domain.models import (
     Customer,
     DnsSnapshot,
     HealthCheckResult,
+    HealthStatus,
     Website,
     utc_now,
 )
@@ -21,9 +22,9 @@ from whm.domain.ports import (
     SettingsRepository,
     WebsiteRepository,
 )
-from whm.domain.status import status_to_risk, worst_known_status
+from whm.domain.hostnames import normalize_hostname, split_host_port
+from whm.domain.status import site_facing_status, status_to_risk
 from whm.infrastructure.dns_checker import check_dns, diff_dns_records
-from whm.infrastructure.email_checker import check_email
 from whm.infrastructure.fingerprint import detect_stack
 from whm.infrastructure.http_checker import check_website, normalize_url
 from whm.infrastructure.importer import ImportResult, apply_import, parse_import_file
@@ -35,14 +36,14 @@ logger = logging.getLogger(__name__)
 
 
 def extract_domain(url: str) -> str:
-    """Pull the hostname from a URL or bare domain string."""
+    """Pull the hostname from a URL or bare domain string (normalized + punycode)."""
     normalized = normalize_url(url)
     host = urlparse(normalized).hostname
     if not host:
         raise ValueError(
             "That doesn’t look like a website. Try something like mybusiness.co.za"
         )
-    return host.lower().rstrip(".")
+    return normalize_hostname(host)
 
 
 ProgressCallback = Callable[[str], None]
@@ -181,28 +182,30 @@ class HealthScanService:
         started = time.perf_counter()
         result = HealthCheckResult(website_id=website_id)
 
-        # Security headers + speed checks are intentionally skipped — operators
-        # usually cannot change those on customer hosting, and they create noise.
-        report("1/6 Checking if the website opens…")
+        # Security headers, speed, and email-auth checks are skipped — they create
+        # noise for website monitoring (operators often cannot change those).
+        report("1/5 Checking if the website opens…")
         http = check_website(website.url, timeout=timeout)
         result.website_status = http["status"]
         result.response_time_ms = http.get("response_time_ms")
         result.findings.extend(http["findings"])
         result.raw["http"] = http.get("raw", {})
 
-        report("2/6 Checking the security certificate…")
-        ssl = check_ssl(website.domain, timeout=timeout)
+        report("2/5 Checking the security certificate…")
+        ssl_host, ssl_port = split_host_port(website.url, default_port=443)
+        ssl = check_ssl(ssl_host or website.domain, port=ssl_port, timeout=timeout)
         result.ssl_status = ssl["status"]
         result.findings.extend(ssl["findings"])
         result.raw["ssl"] = ssl.get("raw", {})
 
-        report("3/6 Checking if the domain name is still registered…")
+        report("3/5 Checking if the domain name is still registered…")
+        # WHOIS always uses registrable domain (eTLD+1), never the subdomain alone.
         whois = check_domain(website.domain)
         result.domain_status = whois["status"]
         result.findings.extend(whois["findings"])
         result.raw["whois"] = whois.get("raw", {})
 
-        report("4/6 Checking web address settings (DNS)…")
+        report("4/5 Checking web address settings (DNS)…")
         dns = check_dns(
             website.domain,
             nameserver=dns_server,
@@ -256,30 +259,20 @@ class HealthScanService:
                 website.domain,
             )
 
-        report("5/6 Checking email / SendGrid setup…")
-        email = check_email(
-            website.domain,
-            dkim_selectors=website.dkim_selectors,
-            nameserver=dns_server,
-            timeout=timeout,
-        )
-        result.email_status = email["status"]
-        result.findings.extend(email["findings"])
-        result.raw["email"] = email.get("raw", {})
+        # Email auth (SPF/DKIM/DMARC/MX) is not part of website health scans.
+        result.email_status = HealthStatus.HEALTHY
+        result.raw["email"] = {"skipped": True}
 
-        report("6/6 Detecting hosting and technology…")
+        report("5/5 Detecting hosting and technology…")
         stack = detect_stack(website.url, timeout=timeout)
         result.findings.extend(stack["findings"])
         result.raw["stack"] = stack.get("raw", {})
 
-        result.overall_status = worst_known_status(
-            [
-                result.website_status,
-                result.ssl_status,
-                result.domain_status,
-                result.dns_status,
-                result.email_status,
-            ]
+        result.overall_status = site_facing_status(
+            result.website_status,
+            result.ssl_status,
+            result.domain_status,
+            result.dns_status,
         )
         result.risk_level = status_to_risk(result.overall_status)
         result.duration_ms = (time.perf_counter() - started) * 1000

@@ -8,13 +8,14 @@ from urllib.parse import urlparse
 
 import httpx
 
+from whm.domain.hostnames import to_ascii_host
 from whm.domain.models import Finding, FindingStatus, HealthStatus
 from whm.domain.probe import is_probe_failure, probe_failed_finding
 from whm.domain.status import worst_status
 
 
 def normalize_url(url: str) -> str:
-    """Ensure the URL has a scheme so httpx can request it."""
+    """Ensure the URL has a scheme; strip junk; punycode IDN hosts."""
     url = (url or "").strip().strip("\ufeff").strip("'\"")
     if not url:
         raise ValueError("Please enter a website address.")
@@ -25,7 +26,7 @@ def normalize_url(url: str) -> str:
     scheme = (parsed.scheme or "https").lower()
     if scheme not in {"http", "https"}:
         raise ValueError("Use a normal website link starting with http:// or https://")
-    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    host = to_ascii_host((parsed.hostname or "").strip())
     if not host or "." not in host:
         raise ValueError(
             "That doesn’t look like a website. Try something like mybusiness.co.za"
@@ -33,8 +34,9 @@ def normalize_url(url: str) -> str:
     path = parsed.path or ""
     if path == "/":
         path = ""
+    port = f":{parsed.port}" if parsed.port else ""
     # Drop userinfo/query/fragment — we only need a clean site URL.
-    return f"{scheme}://{host}{path}"
+    return f"{scheme}://{host}{port}{path}"
 
 
 def check_website(url: str, timeout: float = 10.0) -> dict[str, Any]:
@@ -177,6 +179,20 @@ def check_website(url: str, timeout: float = 10.0) -> dict[str, Any]:
                     "final_url": final_url,
                     "redirects": redirect_history,
                 },
+            )
+        )
+        http_status = HealthStatus.HEALTHY
+    elif status_code in {401, 403}:
+        # Bot protection / login walls often return these even when the site is fine.
+        findings.append(
+            Finding(
+                category="website",
+                title="Website blocked the automated check",
+                status=FindingStatus.INFO,
+                message=(
+                    f"HTTP {status_code} from {final_url}. "
+                    "Common for bot protection — if the site opens in a browser, this is usually fine."
+                ),
             )
         )
         http_status = HealthStatus.HEALTHY

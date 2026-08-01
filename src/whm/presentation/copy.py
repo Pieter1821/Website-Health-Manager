@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from whm.domain.models import FindingStatus, HealthStatus, RiskLevel
+from whm.domain.status import site_facing_status
+
+if TYPE_CHECKING:
+    from whm.domain.models import HealthCheckResult
 
 STATUS_PLAIN = {
     HealthStatus.HEALTHY: "Looks good",
-    HealthStatus.WARNING: "Needs attention",
-    HealthStatus.CRITICAL: "Something's wrong",
-    HealthStatus.UNKNOWN: "Couldn't check",
+    HealthStatus.WARNING: "Worth a look",
+    HealthStatus.CRITICAL: "Needs a fix",
+    HealthStatus.UNKNOWN: "Couldn’t finish",
 }
 
 RISK_PLAIN = {
@@ -20,10 +26,10 @@ RISK_PLAIN = {
 
 FINDING_PLAIN = {
     FindingStatus.CORRECT: "OK",
-    FindingStatus.INCORRECT: "Needs fixing",
-    FindingStatus.MISSING: "Missing",
+    FindingStatus.INCORRECT: "Review",
+    FindingStatus.MISSING: "Not set up",
     FindingStatus.INFO: "Info",
-    FindingStatus.INCONCLUSIVE: "Couldn't check",
+    FindingStatus.INCONCLUSIVE: "Couldn’t finish",
 }
 
 CATEGORY_PLAIN = {
@@ -48,12 +54,12 @@ CATEGORY_TIP = {
     "ssl": "The padlock certificate that keeps the site secure.",
     "domain": "The website name registration (like a lease on the name).",
     "dns": "The address book that points web and email to the right place.",
-    "spf": "Who is allowed to send email for this domain.",
-    "dkim": "A digital stamp that proves the email really came from you.",
-    "dmarc": "What receivers should do with forged or failing email.",
-    "mx": "Where incoming email for this domain should be delivered.",
-    "smtp": "Whether the mail server answers on common ports.",
-    "sendgrid": "SendGrid DNS records so customer mail can send properly.",
+    "spf": "Who may send mail for this domain — only judged when the domain looks mail-active.",
+    "dkim": "Digital stamp on outbound mail — only judged when the domain looks mail-active.",
+    "dmarc": "Spoofing policy — only judged when the domain looks mail-active.",
+    "mx": "Incoming mail hosts. Missing MX is fine for website-only domains.",
+    "smtp": "Optional mail-port probe — usually skipped; not proof mail is broken.",
+    "sendgrid": "Only if this domain already uses SendGrid.",
     "hosting": "Clues about who hosts the website.",
     "technology": "Clues about how the website is built.",
 }
@@ -82,14 +88,51 @@ def category_tip(category: str) -> str:
     )
 
 
+def _area_statuses(result: HealthCheckResult) -> list[tuple[str, HealthStatus]]:
+    # Email is not part of the list Status column.
+    return [
+        ("Website", result.website_status),
+        ("Certificate", result.ssl_status),
+        ("Domain", result.domain_status),
+        ("DNS", result.dns_status),
+    ]
+
+
+def overall_why(result: HealthCheckResult) -> str:
+    """One short line under Status — which area is the problem."""
+    status = site_facing_status(
+        result.website_status,
+        result.ssl_status,
+        result.domain_status,
+        result.dns_status,
+    )
+    if status == HealthStatus.HEALTHY:
+        return "No action needed"
+    if status == HealthStatus.UNKNOWN:
+        return "Try again later"
+
+    target = (
+        HealthStatus.CRITICAL
+        if status == HealthStatus.CRITICAL
+        else HealthStatus.WARNING
+    )
+    bad = [name for name, area in _area_statuses(result) if area == target]
+    if not bad:
+        return "Open Problems & fixes"
+    if len(bad) == 1:
+        return f"Check {bad[0]}"
+    return f"Check {bad[0]} (+{len(bad) - 1} more)"
+
+
 def overall_summary(status: HealthStatus, display_name: str) -> str:
     if status == HealthStatus.HEALTHY:
         return f"{display_name} looks healthy."
     if status == HealthStatus.WARNING:
-        return f"{display_name} works, but a few things should be fixed soon."
+        return f"{display_name} is working, with a few things to improve. See Problems & fixes."
     if status == HealthStatus.CRITICAL:
-        return f"{display_name} has problems that may stop the website or email from working."
-    return (
-        f"We couldn't fully check {display_name}. "
-        "This often means your internet connection was unstable — try again."
-    )
+        return (
+            f"{display_name} needs a fix soon "
+            "(site not opening, or certificate/domain about to expire). "
+            "See Problems & fixes."
+        )
+    return f"Couldn’t finish checking {display_name}. Try again when your internet is steady."

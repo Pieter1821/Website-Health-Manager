@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from whm.domain.models import Finding, FindingStatus, HealthStatus, RiskLevel
+
+if TYPE_CHECKING:
+    from whm.domain.models import HealthCheckResult
 
 # Alert ladder from the PRD (days remaining).
 EXPIRY_THRESHOLDS = (90, 60, 30, 14, 7)
@@ -36,8 +39,9 @@ def finding_to_status(finding: Finding) -> HealthStatus:
     if finding.status == FindingStatus.INCORRECT:
         return HealthStatus.WARNING
     if finding.status == FindingStatus.MISSING:
-        # Missing DMARC/SPF/MX is usually critical for email delivery.
-        if finding.category in {"spf", "mx", "dmarc", "sendgrid"}:
+        # Only MX missing usually stops mail. SPF/DKIM/DMARC/SendGrid gaps
+        # are common even when mail still works — treat those as amber.
+        if finding.category == "mx":
             return HealthStatus.CRITICAL
         return HealthStatus.WARNING
     return HealthStatus.UNKNOWN
@@ -70,6 +74,31 @@ def worst_known_status(statuses: Iterable[HealthStatus]) -> HealthStatus:
     if not known:
         return HealthStatus.UNKNOWN
     return worst_status(known)
+
+
+def site_facing_status(
+    website: HealthStatus,
+    ssl: HealthStatus,
+    domain: HealthStatus,
+    dns: HealthStatus,
+) -> HealthStatus:
+    """
+    Overall status for the websites list / Status column / History.
+
+    Email auth (SPF/DKIM/DMARC/MX) is not part of site health — older stored
+    overall_status values that included email must be recomputed this way.
+    """
+    return worst_known_status([website, ssl, domain, dns])
+
+
+def display_overall(result: HealthCheckResult) -> HealthStatus:
+    """Site-facing overall for UI (list, detail summary, history rows)."""
+    return site_facing_status(
+        result.website_status,
+        result.ssl_status,
+        result.domain_status,
+        result.dns_status,
+    )
 
 
 def aggregate_status(findings: Iterable[Finding]) -> HealthStatus:
