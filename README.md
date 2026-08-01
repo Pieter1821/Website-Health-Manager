@@ -2,6 +2,48 @@
 
 Desktop tool for agencies and IT support: paste a customer website, press **Check**, and see why the site, domain, certificate, DNS, or email (especially SendGrid) is broken — in plain language.
 
+## Get started (manual)
+
+### Option A — use the `.exe` (easiest)
+
+1. Open `dist\WebsiteHealthManager.exe` (double-click).
+2. Chrome opens the WHM window.
+3. Type a customer domain (example: `mybusiness.co.za`) and press **Check**.
+4. Wait until the status line finishes (can take under a minute).
+5. Click the row → read **Problems & fixes**.
+6. Press **Download report** if you need a ZIP for the ticket or customer.
+7. Close the Chrome window when done. Open the `.exe` again next time.
+
+In the app, click **Help** any time for this same guide.
+
+### Option B — import many customers
+
+1. Prepare Excel/CSV with columns **Client Website** and **URL** (other columns are ignored).
+2. In WHM click **Import list** and pick the file.
+3. Select a site → **Check again** (or check new ones from the top bar).
+
+Template: `examples/websites-import-template.csv`
+
+### What the colours mean
+
+| Status | Meaning |
+|--------|---------|
+| Looks good | No action needed for that area |
+| Needs attention | Fix soon (example: certificate renewing soon) |
+| Something's wrong | Likely breaking the site or email |
+| Couldn't check | Your network/DNS failed the probe — retry, do not escalate yet |
+
+Hover the small **i** on each column for a one-line explanation.
+
+### Common actions
+
+- **Check again** — rescan the open site  
+- **Download report** — ZIP with HTML + CSV + JSON on your PC  
+- **Remove** — delete the site from your local list  
+- **Settings** — timeouts, auto-check schedule, Slack/email alerts  
+
+Your data stays on this PC under `%USERPROFILE%\.whm\`.
+
 ## Problem it solves
 
 Customer tickets usually sound like “the website is down” or “mail is in spam”. The real cause is often elsewhere: expired SSL, expired domain, wrong DNS, missing SPF/DKIM/DMARC, or incomplete SendGrid authentication. WHM pulls those checks into one screen so you do not have to jump between registrar, DNS, hosting, and SendGrid.

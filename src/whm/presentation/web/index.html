@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>WHM — Website Health Manager</title>
-  <link rel="stylesheet" href="/static/styles.css?v=info1" />
+  <link rel="stylesheet" href="/static/styles.css?v=manual1" />
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true">
@@ -139,16 +139,41 @@
   <div class="modal hidden" id="help-modal" role="dialog" aria-modal="true">
     <div class="modal-card help-card">
       <header>
-        <h3>How to use WHM</h3>
+        <h3>Get started</h3>
         <button type="button" class="icon-close" id="help-close" aria-label="Close">×</button>
       </header>
-      <ol class="help-steps">
-        <li><strong>Type a website</strong> in the box at the top (or Import list).</li>
-        <li>Press <strong>Check</strong> and wait for the scan to finish.</li>
-        <li><strong>Click a row</strong> to open full-screen problems and fixes.</li>
-        <li>Use <strong>← All websites</strong> to go back to your full list.</li>
-      </ol>
-      <p class="help-note">Scroll the table to see every website. The list is never cut off on purpose.</p>
+      <div class="help-body">
+        <h4>Quick check</h4>
+        <ol class="help-steps">
+          <li>Type a website at the top (example: <code>mybusiness.co.za</code>).</li>
+          <li>Press <strong>Check</strong> and wait for it to finish.</li>
+          <li>Click the row to open <strong>Problems &amp; fixes</strong>.</li>
+          <li>Press <strong>← All websites</strong> to go back to the full list.</li>
+        </ol>
+
+        <h4>Many customers at once</h4>
+        <ol class="help-steps">
+          <li>Use an Excel/CSV with columns <strong>Client Website</strong> and <strong>URL</strong>.</li>
+          <li>Click <strong>Import list</strong> and choose the file.</li>
+          <li>Open a site and press <strong>Check again</strong>.</li>
+        </ol>
+
+        <h4>What the colours mean</h4>
+        <ul class="help-list">
+          <li><strong>Looks good</strong> — no action needed.</li>
+          <li><strong>Needs attention</strong> — fix soon.</li>
+          <li><strong>Something's wrong</strong> — likely breaking site or email.</li>
+          <li><strong>Couldn't check</strong> — your network failed the test; try again before escalating.</li>
+        </ul>
+
+        <h4>Useful buttons</h4>
+        <ul class="help-list">
+          <li><strong>Download report</strong> — ZIP to your PC (HTML, CSV, JSON).</li>
+          <li><strong>i</strong> on a column — short plain-English explanation.</li>
+          <li><strong>Settings</strong> — wait time, auto checks, alert webhooks.</li>
+        </ul>
+        <p class="help-note">Scroll the table to see every website. Your data stays on this computer.</p>
+      </div>
       <footer>
         <button type="button" class="btn-primary" id="help-ok">Got it</button>
       </footer>
@@ -158,6 +183,6 @@
   <div class="toast hidden" id="toast"></div>
   <div class="tip-bubble hidden" id="tip-bubble" role="tooltip"></div>
   <div id="pill-row" class="hidden" aria-hidden="true"></div>
-  <script src="/static/app.js?v=info1"></script>
+  <script src="/static/app.js?v=manual1"></script>
 </body>
 </html>
