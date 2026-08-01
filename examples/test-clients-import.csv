@@ -1,0 +1,8 @@
+Client Website,URL,Notes,Owner,Priority
+ASHA Finance,https://www.asha.co.za,Extra column ignored,Team A,High
+LendGo Finance,https://www.lendgofinance.co.za,Do not import this note,Team B,Medium
+Example Shop,https://www.example.com,Demo only,Team A,Low
+Contoso Mail,https://contoso.org,Has SendGrid usually,Team C,High
+Mzansi Moola,https://www.mzansimoola.co.za,Local test brand,Team B,Medium
+Safe Net Hosting,https://www.safenethosting.co.za,Hosting customer,Team A,Low
+Demo Agency Site,http://example.org/path,HTTP link ok,Team C,Low

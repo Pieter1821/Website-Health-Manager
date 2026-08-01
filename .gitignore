@@ -1,0 +1,54 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+src/*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# App data / local
+*.db
+*.sqlite
+*.sqlite3
+logs/
+exports/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.*
+!*.env.example
+
+# Local offline wheel cache
+.wheels/
+
+# Docs: only ship the project README
+*.md
+!README.md

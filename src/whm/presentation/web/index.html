@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WHM — Website Health Manager</title>
+  <link rel="stylesheet" href="/static/styles.css?v=info1" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true">
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="grain"></div>
+  </div>
+
+  <div class="shell shell-table">
+    <header class="top-bar">
+      <div class="brand-block">
+        <h1 class="brand brand-inline">WHM</h1>
+      </div>
+
+      <form class="command command-inline" id="quick-form">
+        <div class="command-row">
+          <input
+            id="url-input"
+            name="url"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Type a website… e.g. mybusiness.co.za"
+            required
+          />
+          <input
+            id="customer-input"
+            type="text"
+            placeholder="Customer name (optional)"
+            class="ghost-input inline-customer"
+          />
+          <button type="submit" class="btn-primary" id="check-btn">
+            <span>Check</span>
+            <i aria-hidden="true">→</i>
+          </button>
+        </div>
+      </form>
+
+      <div class="top-links">
+        <button type="button" class="linkish" id="help-btn">Help</button>
+        <button type="button" class="linkish" id="settings-btn">Settings</button>
+      </div>
+    </header>
+
+    <main class="work-pane work-pane-table" id="workspace">
+      <section class="view view-list" id="view-list">
+        <header class="work-head">
+          <div>
+            <h2>Websites</h2>
+            <p id="status-line" class="muted status-line" aria-live="polite"></p>
+          </div>
+          <div class="work-actions">
+            <input id="search-input" type="search" placeholder="Search…" />
+            <input id="import-file" type="file" accept=".xlsx,.csv,.txt" hidden />
+            <button type="button" class="btn-ghost" id="import-btn">Import list</button>
+            <button type="button" class="btn-ghost" id="refresh-btn">Refresh</button>
+          </div>
+        </header>
+
+        <div class="table-wrap sites-wrap fullscreen-panel" id="sites-wrap">
+          <table class="data-table sites-table" id="sites-table">
+            <thead>
+              <tr>
+                <th>Website <button type="button" class="info-btn" data-tip="The customer site you are watching." aria-label="About Website">i</button></th>
+                <th>Status <button type="button" class="info-btn" data-tip="Overall health: green is fine, amber needs a look, red is broken." aria-label="About Status">i</button></th>
+                <th>Web <button type="button" class="info-btn" data-tip="Can people open the website in a browser right now?" aria-label="About Web">i</button></th>
+                <th>SSL expires <button type="button" class="info-btn" data-tip="When the padlock certificate ends. After that, browsers show a scary warning." aria-label="About SSL">i</button></th>
+                <th>Domain expires <button type="button" class="info-btn" data-tip="When the domain name registration ends. If it lapses, the site and email stop." aria-label="About Domain">i</button></th>
+                <th>DNS <button type="button" class="info-btn" data-tip="The internet address book for this site (where web and mail point)." aria-label="About DNS">i</button></th>
+                <th>Email <button type="button" class="info-btn" data-tip="Mail trust settings (SPF, DKIM, DMARC, SendGrid). Wrong settings = spam or failed mail." aria-label="About Email">i</button></th>
+                <th>Last checked <button type="button" class="info-btn" data-tip="The last time WHM scanned this site." aria-label="About Last checked">i</button></th>
+              </tr>
+            </thead>
+            <tbody id="site-list"></tbody>
+          </table>
+          <p id="empty-state" class="empty">
+            No websites yet — type one above and press Check.
+          </p>
+        </div>
+      </section>
+
+      <section class="view view-detail hidden" id="view-detail">
+        <header class="work-head detail-head">
+          <div class="detail-head-left">
+            <button type="button" class="btn-ghost back-btn" id="back-btn">← All websites</button>
+            <div>
+              <p class="detail-kicker" id="detail-domain">—</p>
+              <h2 id="detail-name">—</h2>
+              <p class="detail-summary" id="detail-summary">—</p>
+            </div>
+          </div>
+          <div class="detail-actions">
+            <button type="button" class="btn-primary" id="rescan-btn">Check again</button>
+            <button type="button" class="btn-ghost" id="export-btn">Download report</button>
+            <button type="button" class="btn-danger" id="delete-btn">Remove</button>
+          </div>
+        </header>
+
+        <article class="detail-col detail-full fullscreen-panel" id="detail">
+          <div class="detail-empty hidden" id="detail-empty"></div>
+          <div class="detail-body" id="detail-body">
+            <nav class="tabs" role="tablist">
+              <button type="button" class="tab active" data-tab="results">Problems &amp; fixes</button>
+              <button type="button" class="tab" data-tab="history">History</button>
+              <button type="button" class="tab" data-tab="changes">Changes</button>
+            </nav>
+            <div class="tab-panels">
+              <div class="tab-panel active" id="panel-results"></div>
+              <div class="tab-panel" id="panel-history"></div>
+              <div class="tab-panel" id="panel-changes"></div>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal hidden" id="settings-modal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <header>
+        <h3>Settings</h3>
+        <button type="button" class="icon-close" id="settings-close" aria-label="Close">×</button>
+      </header>
+      <form id="settings-form" class="settings-grid"></form>
+      <footer>
+        <button type="button" class="btn-ghost" id="settings-cancel">Cancel</button>
+        <button type="submit" form="settings-form" class="btn-primary">Save</button>
+      </footer>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="help-modal" role="dialog" aria-modal="true">
+    <div class="modal-card help-card">
+      <header>
+        <h3>How to use WHM</h3>
+        <button type="button" class="icon-close" id="help-close" aria-label="Close">×</button>
+      </header>
+      <ol class="help-steps">
+        <li><strong>Type a website</strong> in the box at the top (or Import list).</li>
+        <li>Press <strong>Check</strong> and wait for the scan to finish.</li>
+        <li><strong>Click a row</strong> to open full-screen problems and fixes.</li>
+        <li>Use <strong>← All websites</strong> to go back to your full list.</li>
+      </ol>
+      <p class="help-note">Scroll the table to see every website. The list is never cut off on purpose.</p>
+      <footer>
+        <button type="button" class="btn-primary" id="help-ok">Got it</button>
+      </footer>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+  <div class="tip-bubble hidden" id="tip-bubble" role="tooltip"></div>
+  <div id="pill-row" class="hidden" aria-hidden="true"></div>
+  <script src="/static/app.js?v=info1"></script>
+</body>
+</html>

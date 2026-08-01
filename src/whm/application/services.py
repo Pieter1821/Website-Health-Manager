@@ -1,0 +1,330 @@
+"""Application services / use cases."""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import Callable, Optional
+from urllib.parse import urlparse
+
+from whm.domain.models import (
+    Customer,
+    DnsSnapshot,
+    HealthCheckResult,
+    Website,
+    utc_now,
+)
+from whm.domain.ports import (
+    CustomerRepository,
+    DnsSnapshotRepository,
+    HealthCheckRepository,
+    SettingsRepository,
+    WebsiteRepository,
+)
+from whm.domain.status import status_to_risk, worst_known_status
+from whm.infrastructure.dns_checker import check_dns, diff_dns_records
+from whm.infrastructure.email_checker import check_email
+from whm.infrastructure.fingerprint import detect_stack
+from whm.infrastructure.http_checker import check_website, normalize_url
+from whm.infrastructure.importer import ImportResult, apply_import, parse_import_file
+from whm.infrastructure.notifications import dispatch_notifications
+from whm.infrastructure.ssl_checker import check_ssl
+from whm.infrastructure.whois_checker import check_domain
+
+logger = logging.getLogger(__name__)
+
+
+def extract_domain(url: str) -> str:
+    """Pull the hostname from a URL or bare domain string."""
+    normalized = normalize_url(url)
+    host = urlparse(normalized).hostname
+    if not host:
+        raise ValueError(
+            "That doesn’t look like a website. Try something like mybusiness.co.za"
+        )
+    return host.lower().rstrip(".")
+
+
+ProgressCallback = Callable[[str], None]
+
+
+class WebsiteService:
+    """CRUD helpers for customers and websites."""
+
+    def __init__(
+        self,
+        customers: CustomerRepository,
+        websites: WebsiteRepository,
+    ) -> None:
+        self._customers = customers
+        self._websites = websites
+
+    def add_customer(self, name: str, notes: str = "") -> Customer:
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValueError("Customer name is empty")
+        for existing in self._customers.list_all():
+            if existing.name.lower() == cleaned.lower():
+                return existing
+        return self._customers.add(Customer(name=cleaned, notes=notes))
+
+    def list_customers(self) -> list[Customer]:
+        return self._customers.list_all()
+
+    def add_website(
+        self,
+        url: str,
+        display_name: str = "",
+        customer_id: Optional[int] = None,
+        dkim_selectors: str = "s1,s2,em,default",
+        check_interval: str = "manual",
+    ) -> Website:
+        clean_url = normalize_url(url)
+        domain = extract_domain(clean_url)
+        name = display_name.strip() or domain
+        if customer_id is not None and self._customers.get(customer_id) is None:
+            customer_id = None
+        # Avoid duplicate rows for the same domain (common when pasting https:// again).
+        for existing in self._websites.list_all():
+            if existing.domain == domain:
+                existing.url = clean_url
+                if name and existing.display_name != name and display_name.strip():
+                    existing.display_name = name
+                if customer_id is not None:
+                    existing.customer_id = customer_id
+                return self._websites.update(existing)
+        website = Website(
+            url=clean_url,
+            domain=domain,
+            display_name=name,
+            customer_id=customer_id,
+            dkim_selectors=dkim_selectors,
+            check_interval=check_interval or "manual",
+        )
+        return self._websites.add(website)
+
+    def list_websites(self) -> list[Website]:
+        return self._websites.list_all()
+
+    def search(self, query: str) -> list[Website]:
+        if not query.strip():
+            return self.list_websites()
+        return self._websites.search(query)
+
+    def get_website(self, website_id: int) -> Optional[Website]:
+        return self._websites.get(website_id)
+
+    def update_website(self, website: Website) -> Website:
+        return self._websites.update(website)
+
+    def delete_website(self, website_id: int) -> None:
+        self._websites.delete(website_id)
+
+    def import_list(self, filename: str, data: bytes) -> ImportResult:
+        """Import websites from an Excel (.xlsx) or CSV file."""
+        rows = parse_import_file(filename, data)
+        existing = {site.domain for site in self.list_websites()}
+        return apply_import(
+            rows,
+            existing_domains=existing,
+            add_customer=self.add_customer,
+            add_website=self.add_website,
+            extract_domain=extract_domain,
+        )
+
+
+class HealthScanService:
+    """Run a full health scan and persist results."""
+
+    def __init__(
+        self,
+        websites: WebsiteRepository,
+        health_checks: HealthCheckRepository,
+        dns_snapshots: DnsSnapshotRepository,
+        settings: SettingsRepository,
+    ) -> None:
+        self._websites = websites
+        self._health_checks = health_checks
+        self._dns_snapshots = dns_snapshots
+        self._settings = settings
+
+    def _timeout(self) -> float:
+        try:
+            return float(self._settings.get("timeout_seconds", "10"))
+        except ValueError:
+            return 10.0
+
+    def _dns_server(self) -> Optional[str]:
+        value = self._settings.get("dns_server", "").strip().strip("()[]\"'")
+        # Guard against pasted values like "8.8.8.8)" which break dnspython.
+        if value and all(ch.isdigit() or ch == "." for ch in value):
+            return value
+        return value or None
+
+    def scan_website(
+        self,
+        website_id: int,
+        progress: Optional[ProgressCallback] = None,
+        notify: bool = True,
+    ) -> HealthCheckResult:
+        website = self._websites.get(website_id)
+        if website is None:
+            raise ValueError(f"Website {website_id} not found")
+
+        def report(message: str) -> None:
+            logger.info("%s [%s]", message, website.domain)
+            if progress:
+                progress(message)
+
+        timeout = self._timeout()
+        dns_server = self._dns_server()
+        started = time.perf_counter()
+        result = HealthCheckResult(website_id=website_id)
+
+        # Security headers + speed checks are intentionally skipped — operators
+        # usually cannot change those on customer hosting, and they create noise.
+        report("1/6 Checking if the website opens…")
+        http = check_website(website.url, timeout=timeout)
+        result.website_status = http["status"]
+        result.response_time_ms = http.get("response_time_ms")
+        result.findings.extend(http["findings"])
+        result.raw["http"] = http.get("raw", {})
+
+        report("2/6 Checking the security certificate…")
+        ssl = check_ssl(website.domain, timeout=timeout)
+        result.ssl_status = ssl["status"]
+        result.findings.extend(ssl["findings"])
+        result.raw["ssl"] = ssl.get("raw", {})
+
+        report("3/6 Checking if the domain name is still registered…")
+        whois = check_domain(website.domain)
+        result.domain_status = whois["status"]
+        result.findings.extend(whois["findings"])
+        result.raw["whois"] = whois.get("raw", {})
+
+        report("4/6 Checking web address settings (DNS)…")
+        dns = check_dns(
+            website.domain,
+            nameserver=dns_server,
+            timeout=timeout,
+            progress=report,
+        )
+        result.dns_status = dns["status"]
+        result.findings.extend(dns["findings"])
+        result.dns_records = dns.get("records", [])
+        result.raw["dns"] = dns.get("raw", {})
+        logger.info(
+            "DNS settings summary for %s: status=%s records=%s",
+            website.domain,
+            result.dns_status.value,
+            len(result.dns_records),
+        )
+
+        if dns.get("probe_ok", True):
+            previous = self._dns_snapshots.latest_for_website(website_id)
+            self._dns_snapshots.add(
+                DnsSnapshot(website_id=website_id, records=list(result.dns_records))
+            )
+            if previous is not None:
+                changes = diff_dns_records(previous.records, result.dns_records)
+                result.raw["dns_changes"] = changes
+                if changes:
+                    from whm.domain.models import Finding, FindingStatus
+
+                    summary = "; ".join(
+                        f"{c['change']} {c['rtype']} {c['new_value'] or c['old_value']}"
+                        for c in changes[:8]
+                    )
+                    logger.info("DNS settings changed for %s: %s", website.domain, summary)
+                    result.findings.append(
+                        Finding(
+                            category="dns",
+                            title="DNS settings changed",
+                            status=FindingStatus.INFO,
+                            message=summary,
+                            details={"changes": changes},
+                            recommendation="Confirm this change was intentional (for example after a migration).",
+                        )
+                    )
+                else:
+                    logger.info("DNS settings unchanged for %s", website.domain)
+        else:
+            result.raw["dns_changes"] = []
+            result.raw["dns_snapshot_skipped"] = True
+            logger.warning(
+                "DNS snapshot skipped for %s (probe failed — not treating as settings change)",
+                website.domain,
+            )
+
+        report("5/6 Checking email / SendGrid setup…")
+        email = check_email(
+            website.domain,
+            dkim_selectors=website.dkim_selectors,
+            nameserver=dns_server,
+            timeout=timeout,
+        )
+        result.email_status = email["status"]
+        result.findings.extend(email["findings"])
+        result.raw["email"] = email.get("raw", {})
+
+        report("6/6 Detecting hosting and technology…")
+        stack = detect_stack(website.url, timeout=timeout)
+        result.findings.extend(stack["findings"])
+        result.raw["stack"] = stack.get("raw", {})
+
+        result.overall_status = worst_known_status(
+            [
+                result.website_status,
+                result.ssl_status,
+                result.domain_status,
+                result.dns_status,
+                result.email_status,
+            ]
+        )
+        result.risk_level = status_to_risk(result.overall_status)
+        result.duration_ms = (time.perf_counter() - started) * 1000
+        result.checked_at = utc_now()
+
+        saved = self._health_checks.add(result)
+        website.last_checked_at = saved.checked_at
+        self._websites.update(website)
+
+        if notify:
+            try:
+                sent = dispatch_notifications(
+                    website, saved, dict(self._settings.get_all())
+                )
+                if sent:
+                    logger.info("Notifications sent: %s", ", ".join(sent))
+            except Exception:  # noqa: BLE001
+                logger.exception("Notification dispatch failed")
+
+        report("Done.")
+        return saved
+
+    def latest(self, website_id: int) -> Optional[HealthCheckResult]:
+        return self._health_checks.latest_for_website(website_id)
+
+    def history(self, website_id: int, limit: int = 20) -> list[HealthCheckResult]:
+        return self._health_checks.history_for_website(website_id, limit=limit)
+
+    def dns_diff(self, website_id: int) -> list[dict[str, str]]:
+        latest = self._dns_snapshots.latest_for_website(website_id)
+        previous = self._dns_snapshots.previous_for_website(website_id)
+        if not latest or not previous:
+            return []
+        return diff_dns_records(previous.records, latest.records)
+
+
+class SettingsService:
+    def __init__(self, settings: SettingsRepository) -> None:
+        self._settings = settings
+
+    def get_all(self) -> dict[str, str]:
+        return self._settings.get_all()
+
+    def get(self, key: str, default: str = "") -> str:
+        return self._settings.get(key, default)
+
+    def set(self, key: str, value: str) -> None:
+        self._settings.set(key, value)
