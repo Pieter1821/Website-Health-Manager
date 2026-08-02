@@ -19,6 +19,7 @@ from typing import Any
 from whm.infrastructure.cloud_client import CloudApiClient, CloudApiError
 from whm.infrastructure.cloud_config import CloudConfig, load_cloud_config, save_cloud_config
 from whm.infrastructure.database import connect, default_db_path, initialize_database
+from whm.infrastructure.secret_settings import SECRET_SETTING_KEYS
 
 
 def dump_local_db(db_path: Path) -> dict[str, Any]:
@@ -33,7 +34,11 @@ def dump_local_db(db_path: Path) -> dict[str, Any]:
         dict(r) for r in conn.execute("SELECT * FROM dns_snapshots ORDER BY id")
     ]
     settings_rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    settings = {str(r["key"]): str(r["value"]) for r in settings_rows}
+    settings = {
+        str(r["key"]): str(r["value"])
+        for r in settings_rows
+        if str(r["key"]) not in SECRET_SETTING_KEYS
+    }
     conn.close()
     return {
         "confirm": "replace-cloud-data",
@@ -60,7 +65,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--save-config",
         action="store_true",
-        help="Write api-url/token to ~/.whm/cloud.json after a successful migrate",
+        help="Write api-url (and bootstrap token for scripts) to ~/.whm/cloud.json",
+    )
+    parser.add_argument(
+        "--bootstrap-user",
+        default="",
+        help="Create the first admin user after migrate (requires empty users table)",
+    )
+    parser.add_argument(
+        "--bootstrap-password",
+        default="",
+        help="Password for --bootstrap-user (min 10 characters)",
     )
     parser.add_argument(
         "--dry-run",
@@ -122,13 +137,34 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print("Migrate OK:", json.dumps(result, indent=2))
+
+    if args.bootstrap_user:
+        password = args.bootstrap_password
+        if len(password) < 10:
+            print(
+                "Bootstrap skipped: --bootstrap-password must be at least 10 characters.",
+                file=sys.stderr,
+            )
+        else:
+            try:
+                boot = client.bootstrap_admin(token, args.bootstrap_user, password)
+                print("Bootstrap OK:", json.dumps(boot, indent=2))
+                print(
+                    "Sign in from the desktop app with that username/password, "
+                    "then enroll authenticator MFA."
+                )
+            except CloudApiError as exc:
+                print(f"Bootstrap failed: {exc}", file=sys.stderr)
+
     if args.save_config:
+        # Save URL for the desktop app; keep bootstrap token for scripts only.
         path = save_cloud_config(api_url, token)
         print(f"Saved cloud config to {path}")
+        print("Desktop users should sign in with username/password + MFA (not the bootstrap token).")
     else:
         print(
-            "Tip: save connection with --save-config, or set env "
-            "WHM_API_URL / WHM_API_TOKEN so the desktop app uses D1."
+            "Tip: --save-config writes ~/.whm/cloud.json; then open the app and sign in. "
+            "Set WHM_JWT_SECRET on the Worker before first login."
         )
     return 0
 

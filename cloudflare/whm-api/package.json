@@ -9,6 +9,8 @@
     "db:create": "wrangler d1 create whm-db",
     "db:migrate:local": "wrangler d1 execute whm-db --local --file=./schema.sql",
     "db:migrate:remote": "wrangler d1 execute whm-db --remote --file=./schema.sql",
+    "db:migrate:users:remote": "wrangler d1 execute whm-db --remote --file=./migrations/002_users.sql",
+    "db:migrate:users:local": "wrangler d1 execute whm-db --local --file=./migrations/002_users.sql",
     "tail": "wrangler tail"
   },
   "devDependencies": {

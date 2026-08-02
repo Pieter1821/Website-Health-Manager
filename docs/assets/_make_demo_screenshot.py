@@ -142,7 +142,7 @@ def seed(db: Path) -> None:
 
 def main() -> None:
     seed(DEMO_DB)
-    websites, scans, settings, conn = build_services(DEMO_DB)
+    websites, scans, settings, conn, _cloud = build_services(DEMO_DB)
     # Dedicated high port so we never screenshot a live client DB on 17865.
     server, url = start_server(websites, scans, settings, port=27991)
     assert "27991" in url, f"Expected demo port, got {url}"

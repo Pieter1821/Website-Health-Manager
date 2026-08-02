@@ -14,6 +14,12 @@ const state = {
   customerFilter: "",
   sortKey: "urgency",
   sortDir: "asc", // urgency: asc = worst first
+  cloudMode: false,
+  authenticated: true,
+  role: "admin",
+  username: "",
+  authTempToken: "",
+  authFlow: "password", // password | mfa | enroll
 };
 
 const el = {
@@ -106,12 +112,104 @@ function showView(view) {
 }
 
 async function api(path, options = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      ...options,
+    });
+  } catch (err) {
+    const hint =
+      "Couldn’t reach the local WHM server. Restart the app (stop python -m whm, then start again) and retry.";
+    throw new Error(hint);
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText || "Request failed");
+  if (!res.ok) {
+    if (data.auth_required || res.status === 401) {
+      state.authenticated = false;
+      showLoginGate();
+    }
+    throw new Error(data.error || res.statusText || "Request failed");
+  }
+  return data;
+}
+
+function applyAuthUi() {
+  document.body.classList.toggle("cloud-mode", Boolean(state.cloudMode));
+  document.body.classList.toggle("role-viewer", state.role === "viewer");
+  document.body.classList.toggle("role-operator", state.role === "operator");
+  document.body.classList.toggle("role-admin", state.role === "admin");
+  const chip = document.getElementById("session-chip");
+  const usersBtn = document.getElementById("users-btn");
+  const signout = document.getElementById("signout-btn");
+  if (chip) {
+    if (state.cloudMode && state.authenticated && state.username) {
+      chip.textContent = `${state.username} · ${state.role}`;
+      chip.classList.remove("hidden");
+    } else {
+      chip.classList.add("hidden");
+    }
+  }
+  if (usersBtn) {
+    usersBtn.classList.toggle("hidden", !(state.cloudMode && state.role === "admin" && state.authenticated));
+  }
+  if (signout) {
+    signout.classList.toggle("hidden", !state.cloudMode);
+  }
+}
+
+function showLoginStep(step) {
+  state.authFlow = step;
+  document.querySelectorAll("#login-gate .login-step").forEach((node) => {
+    node.classList.toggle("hidden", node.dataset.step !== step);
+  });
+  const title = document.getElementById("login-title");
+  const subtitle = document.getElementById("login-subtitle");
+  if (title && subtitle) {
+    if (step === "password") {
+      title.textContent = "Sign in to continue";
+      subtitle.textContent =
+        "Use your WHM username and password. We’ll ask for an authenticator code next.";
+    } else if (step === "mfa") {
+      title.textContent = "Authenticator code";
+      subtitle.textContent = "Almost done — enter the code from your authenticator app.";
+    } else if (step === "enroll") {
+      title.textContent = "Set up authenticator";
+      subtitle.textContent = "One-time setup so only you can sign in to this cloud account.";
+    }
+  }
+}
+
+function showLoginGate() {
+  const gate = document.getElementById("login-gate");
+  if (!gate) return;
+  gate.classList.remove("hidden");
+  showLoginStep("password");
+  const err = document.getElementById("login-error");
+  if (err) {
+    err.classList.add("hidden");
+    err.textContent = "";
+  }
+}
+
+function hideLoginGate() {
+  document.getElementById("login-gate")?.classList.add("hidden");
+}
+
+function setLoginError(message) {
+  const err = document.getElementById("login-error");
+  if (!err) return;
+  err.textContent = message || "";
+  err.classList.toggle("hidden", !message);
+}
+
+async function refreshAuthStatus() {
+  const data = await api("/api/auth/status");
+  state.cloudMode = Boolean(data.cloud_mode);
+  state.authenticated = Boolean(data.authenticated);
+  state.role = data.role || (state.cloudMode ? "" : "admin");
+  state.username = data.username || "";
+  applyAuthUi();
   return data;
 }
 
@@ -1169,17 +1267,200 @@ function bind() {
   showView("list");
 }
 
+function bindAuth() {
+  const form = document.getElementById("login-form");
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setLoginError("");
+    const username = document.getElementById("login-username")?.value?.trim() || "";
+    const password = document.getElementById("login-password")?.value || "";
+    try {
+      const data = await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      });
+      state.authTempToken = data.temp_token || "";
+      if (data.status === "mfa_enrollment_required") {
+        const qr = document.getElementById("login-qr");
+        const secret = document.getElementById("login-secret");
+        if (qr && data.qr_png_base64) {
+          qr.src = `data:image/png;base64,${data.qr_png_base64}`;
+        }
+        if (secret) secret.textContent = data.totp_secret || "";
+        showLoginStep("enroll");
+        return;
+      }
+      if (data.status === "mfa_required") {
+        showLoginStep("mfa");
+        document.getElementById("login-totp")?.focus();
+        return;
+      }
+      setLoginError("Unexpected login response");
+    } catch (err) {
+      setLoginError(err.message || "Sign-in failed");
+    }
+  });
+
+  document.getElementById("login-totp-btn")?.addEventListener("click", async () => {
+    setLoginError("");
+    const code = (document.getElementById("login-totp")?.value || "").replace(/\s/g, "");
+    try {
+      const data = await api("/api/auth/login/totp", {
+        method: "POST",
+        body: JSON.stringify({ temp_token: state.authTempToken, code }),
+      });
+      state.authenticated = true;
+      state.username = data.user?.username || "";
+      state.role = data.user?.role || "";
+      hideLoginGate();
+      applyAuthUi();
+      showLoader("Loading websites…");
+      await loadSites();
+      hideLoader();
+      toast(`Signed in as ${state.username}`, { type: "ok" });
+    } catch (err) {
+      setLoginError(err.message || "Invalid code");
+    }
+  });
+
+  document.getElementById("login-enroll-btn")?.addEventListener("click", async () => {
+    setLoginError("");
+    const code = (document.getElementById("login-enroll-totp")?.value || "").replace(/\s/g, "");
+    try {
+      const data = await api("/api/auth/mfa/enroll", {
+        method: "POST",
+        body: JSON.stringify({ temp_token: state.authTempToken, code }),
+      });
+      state.authenticated = true;
+      state.username = data.user?.username || "";
+      state.role = data.user?.role || "";
+      hideLoginGate();
+      applyAuthUi();
+      showLoader("Loading websites…");
+      await loadSites();
+      hideLoader();
+      toast("Authenticator enabled — signed in", { type: "ok" });
+    } catch (err) {
+      setLoginError(err.message || "Couldn’t enable authenticator");
+    }
+  });
+
+  document.getElementById("signout-btn")?.addEventListener("click", async () => {
+    try {
+      await api("/api/auth/logout", { method: "POST", body: "{}" });
+    } catch {
+      /* ignore */
+    }
+    state.authenticated = false;
+    state.username = "";
+    state.role = "";
+    state.sites = [];
+    applyAuthUi();
+    showLoginGate();
+    toast("Signed out", { type: "info" });
+  });
+
+  document.getElementById("users-btn")?.addEventListener("click", () => openUsersModal());
+  document.getElementById("users-close")?.addEventListener("click", () => {
+    document.getElementById("users-modal")?.classList.add("hidden");
+  });
+  document.getElementById("users-create-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/users", {
+        method: "POST",
+        body: JSON.stringify({
+          username: document.getElementById("new-username").value.trim(),
+          password: document.getElementById("new-password").value,
+          role: document.getElementById("new-role").value,
+        }),
+      });
+      document.getElementById("users-create-form").reset();
+      await renderUsersList();
+      toast("User created", { type: "ok" });
+    } catch (err) {
+      toast(err.message || "Couldn’t create user", { type: "error" });
+    }
+  });
+}
+
+async function renderUsersList() {
+  const tbody = document.getElementById("users-list");
+  if (!tbody) return;
+  const data = await api("/api/users");
+  const users = data.users || [];
+  tbody.innerHTML = users
+    .map(
+      (u) => `
+    <tr>
+      <td>${escapeHtml(u.username)}${u.disabled ? " (disabled)" : ""}</td>
+      <td>${escapeHtml(u.role)}</td>
+      <td>${u.totp_enabled ? "On" : "Off"}</td>
+      <td>
+        <button type="button" class="btn-ghost" data-reset-mfa="${u.id}">Reset MFA</button>
+        <button type="button" class="btn-ghost" data-toggle-user="${u.id}" data-disabled="${u.disabled ? "0" : "1"}">
+          ${u.disabled ? "Enable" : "Disable"}
+        </button>
+      </td>
+    </tr>`
+    )
+    .join("");
+  tbody.querySelectorAll("[data-reset-mfa]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/api/users/${btn.dataset.resetMfa}/reset-mfa`, {
+          method: "POST",
+          body: "{}",
+        });
+        await renderUsersList();
+        toast("MFA reset — user must re-enroll", { type: "ok" });
+      } catch (err) {
+        toast(err.message || "Reset failed", { type: "error" });
+      }
+    });
+  });
+  tbody.querySelectorAll("[data-toggle-user]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/api/users/${btn.dataset.toggleUser}`, {
+          method: "PUT",
+          body: JSON.stringify({ disabled: btn.dataset.disabled === "1" }),
+        });
+        await renderUsersList();
+      } catch (err) {
+        toast(err.message || "Update failed", { type: "error" });
+      }
+    });
+  });
+}
+
+async function openUsersModal() {
+  try {
+    await renderUsersList();
+    document.getElementById("users-modal")?.classList.remove("hidden");
+  } catch (err) {
+    toast(err.message || "Couldn’t load users", { type: "error" });
+  }
+}
+
 bind();
-showLoader("Loading websites…");
-loadSites()
-  .then(() => {
+bindAuth();
+showLoader("Starting…");
+refreshAuthStatus()
+  .then(async (status) => {
+    if (status.cloud_mode && !status.authenticated) {
+      hideLoader();
+      showLoginGate();
+      return;
+    }
+    showLoader("Loading websites…");
+    await loadSites();
     setStatus("");
     hideLoader();
-    // Quiet background check — only prompts when a newer release exists.
     setTimeout(() => checkForUpdates({ quiet: true }), 1500);
   })
   .catch((err) => {
-    setStatus("Couldn’t load sites");
-    toast(err.message || "Couldn’t load sites", { type: "error" });
+    setStatus("Couldn’t start");
+    toast(err.message || "Couldn’t start", { type: "error" });
     hideLoader();
   });

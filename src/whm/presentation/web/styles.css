@@ -1450,3 +1450,173 @@ body.is-working .btn-ghost.busy {
   .detail-actions { width: auto; }
   .top-links { margin-left: auto; }
 }
+
+/* Cloud login gate */
+.login-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background:
+    radial-gradient(ellipse 70% 50% at 50% 20%, rgba(61, 207, 154, 0.14), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 80% 80%, rgba(90, 140, 220, 0.12), transparent 50%),
+    rgba(8, 12, 20, 0.88);
+  backdrop-filter: blur(12px);
+}
+.login-gate.hidden { display: none; }
+.login-card {
+  width: min(440px, 100%);
+  background: linear-gradient(180deg, rgba(22, 30, 42, 0.96), rgba(14, 20, 30, 0.98));
+  border: 1px solid rgba(243, 235, 226, 0.12);
+  border-radius: 24px;
+  padding: 2rem 1.75rem 1.75rem;
+  box-shadow: var(--shadow);
+  animation: login-in 0.35s ease;
+}
+@keyframes login-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.login-brand {
+  text-align: center;
+  margin-bottom: 1.35rem;
+}
+.login-logo {
+  display: block;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 0.85rem;
+  border-radius: 22px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+.login-product {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
+.login-brand h2 {
+  margin: 0 0 0.45rem;
+  font-size: 1.45rem;
+  font-weight: 600;
+  color: var(--paper);
+}
+.login-subtitle,
+.login-step-lead {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--mist);
+}
+.login-step-lead { margin-bottom: 0.85rem; text-align: center; }
+.login-form label {
+  display: block;
+  margin: 0.9rem 0 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--paper-dim);
+}
+.login-form input,
+.users-create input,
+.users-create select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid rgba(243, 235, 226, 0.14);
+  background: rgba(8, 12, 18, 0.55);
+  color: var(--paper);
+  font: inherit;
+  font-size: 1rem;
+}
+.login-form input::placeholder {
+  color: rgba(201, 191, 179, 0.45);
+}
+.login-form input:focus {
+  border-color: rgba(61, 207, 154, 0.55);
+  background: rgba(8, 12, 18, 0.75);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(61, 207, 154, 0.18);
+}
+.login-code {
+  text-align: center;
+  letter-spacing: 0.28em;
+  font-size: 1.35rem !important;
+  font-weight: 600;
+}
+.login-form .btn-primary {
+  width: 100%;
+  margin-top: 1.15rem;
+  padding: 0.85rem 1rem;
+  font-size: 1rem;
+}
+.login-hint {
+  margin: 0.75rem 0 0;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--mist);
+}
+.login-manual-label {
+  margin: 0.5rem 0 0.25rem;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--mist);
+}
+.login-qr {
+  display: block;
+  width: 180px;
+  height: 180px;
+  margin: 0.75rem auto;
+  background: #fff;
+  border-radius: 14px;
+  padding: 0.5rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.login-secret, .mono.small {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.78rem;
+  word-break: break-all;
+  text-align: center;
+  color: var(--paper-dim);
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.error-text {
+  color: #fecaca;
+  margin-top: 0.85rem;
+  font-size: 0.9rem;
+  text-align: center;
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  background: var(--crit-dim);
+  border: 1px solid rgba(239, 106, 90, 0.35);
+}
+.session-chip {
+  font-size: 0.8rem;
+  color: var(--muted, #94a3b8);
+  margin-right: 0.35rem;
+  white-space: nowrap;
+}
+.users-card { width: min(640px, 96vw); max-height: 85vh; overflow: auto; }
+.users-create { margin-top: 1.25rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.users-create h4 { margin: 0 0 0.5rem; }
+.users-table .btn-ghost { font-size: 0.8rem; padding: 0.25rem 0.5rem; }
+body.role-viewer .btn-remove-all,
+body.role-viewer #import-btn,
+body.role-viewer #check-all-btn,
+body.role-viewer #check-btn,
+body.role-viewer #quick-form {
+  display: none !important;
+}
+body.role-viewer #settings-btn { display: none !important; }
+body:not(.cloud-mode) #signout-btn,
+body:not(.cloud-mode) #users-btn,
+body:not(.cloud-mode) #session-chip { display: none !important; }

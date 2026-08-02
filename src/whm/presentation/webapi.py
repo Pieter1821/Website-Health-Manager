@@ -14,10 +14,18 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
+from datetime import datetime, timedelta, timezone
+
 from whm import __version__ as APP_VERSION
 from whm.application.services import HealthScanService, SettingsService, WebsiteService
 from whm.domain.models import FindingStatus, HealthCheckResult, Website
 from whm.domain.status import display_overall, status_to_risk
+from whm.infrastructure.cloud_client import CloudApiClient, CloudApiError
+from whm.infrastructure.cloud_config import (
+    clear_cloud_session,
+    load_cloud_config,
+    save_cloud_config,
+)
 from whm.infrastructure.reports import (
     save_portfolio_report_to_downloads,
     save_report_to_downloads,
@@ -42,6 +50,19 @@ WEB_ROOT = Path(__file__).resolve().parent / "web"
 
 def _json_bytes(payload: Any, status: int = 200) -> tuple[int, bytes, str]:
     return status, json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8"
+
+
+def _otpauth_qr_png_b64(otpauth_uri: str) -> str:
+    """PNG QR as base64 for authenticator enrollment (PyOTP-compatible otpauth URI)."""
+    import base64
+    import io
+
+    import qrcode
+
+    img = qrcode.make(otpauth_uri)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _escape(text: str) -> str:
@@ -305,12 +326,43 @@ class AppContext:
         websites: WebsiteService,
         scans: HealthScanService,
         settings: SettingsService,
+        cloud_client: CloudApiClient | None = None,
     ) -> None:
         self.websites = websites
         self.scans = scans
         self.settings = settings
+        self.cloud = cloud_client
+        self.auth_user: dict[str, Any] | None = None
         self.jobs: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
+        if cloud_client and cloud_client.token:
+            try:
+                me = cloud_client.me()
+                self.auth_user = me.get("user") if isinstance(me, dict) else None
+            except CloudApiError:
+                self.auth_user = None
+
+    @property
+    def cloud_mode(self) -> bool:
+        return self.cloud is not None
+
+    @property
+    def role(self) -> str:
+        if self.auth_user and self.auth_user.get("role"):
+            return str(self.auth_user["role"])
+        cfg = load_cloud_config()
+        return (cfg.role if cfg else "") or ""
+
+    def require_cloud_roles(self, *roles: str) -> tuple[int, bytes, str] | None:
+        if not self.cloud_mode:
+            return None
+        if not self.cloud or not self.cloud.token or not self.auth_user:
+            return _json_bytes({"error": "Sign in required", "auth_required": True}, 401)
+        if self.role not in roles:
+            return _json_bytes(
+                {"error": "You do not have permission for this action"}, 403
+            )
+        return None
 
 
 def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
@@ -319,6 +371,23 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
 
         def log_message(self, fmt: str, *args: Any) -> None:
             logger.debug("HTTP " + fmt, *args)
+
+        def _apply_session(self, data: dict[str, Any]) -> None:
+            token = str(data.get("token") or "")
+            user = data.get("user") or {}
+            expires_in = int(data.get("expires_in") or 12 * 60 * 60)
+            if not ctx.cloud or not token:
+                return
+            ctx.cloud.set_token(token)
+            ctx.auth_user = user if isinstance(user, dict) else None
+            expires = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            save_cloud_config(
+                ctx.cloud.api_url,
+                token,
+                username=str(user.get("username") or ""),
+                session_expires_at=expires.isoformat().replace("+00:00", "Z"),
+                role=str(user.get("role") or ""),
+            )
 
         def _send(
             self,
@@ -366,6 +435,15 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path == "/api/sites":
+                if ctx.cloud_mode and (
+                    not ctx.cloud or not ctx.cloud.token or not ctx.auth_user
+                ):
+                    self._send(
+                        *_json_bytes(
+                            {"error": "Sign in required", "auth_required": True}, 401
+                        )
+                    )
+                    return
                 # Drop leftover customer names that no longer have any sites.
                 try:
                     ctx.websites.purge_unused_customers()
@@ -460,6 +538,41 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 )
                 return
 
+            if path == "/api/auth/status":
+                cfg = load_cloud_config()
+                cloud_mode = ctx.cloud is not None
+                authed = bool(ctx.auth_user and ctx.cloud and ctx.cloud.token)
+                self._send(
+                    *_json_bytes(
+                        {
+                            "cloud_mode": cloud_mode,
+                            "authenticated": authed if cloud_mode else True,
+                            "api_url": (cfg.api_url if cfg else "") or (
+                                ctx.cloud.api_url if ctx.cloud else ""
+                            ),
+                            "username": (ctx.auth_user or {}).get("username")
+                            or (cfg.username if cfg else ""),
+                            "role": ctx.role if cloud_mode else "admin",
+                            "user": ctx.auth_user,
+                        }
+                    )
+                )
+                return
+
+            if path == "/api/users":
+                denied = ctx.require_cloud_roles("admin")
+                if denied:
+                    self._send(*denied)
+                    return
+                assert ctx.cloud is not None
+                try:
+                    data = ctx.cloud.list_users()
+                except CloudApiError as exc:
+                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 400))
+                    return
+                self._send(*_json_bytes(data))
+                return
+
             if path == "/api/updates/check":
                 info = check_for_update()
                 self._send(*_json_bytes(update_info_dict(info)))
@@ -476,7 +589,103 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 self._send(*_json_bytes({"error": "Invalid JSON"}, 400))
                 return
 
+            if path == "/api/auth/login":
+                if not ctx.cloud:
+                    self._send(*_json_bytes({"error": "Cloud mode is not enabled"}, 400))
+                    return
+                username = str(payload.get("username", "")).strip()
+                password = str(payload.get("password", ""))
+                try:
+                    data = ctx.cloud.login(username, password)
+                except CloudApiError as exc:
+                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 401))
+                    return
+                if data.get("status") == "mfa_enrollment_required" and data.get(
+                    "otpauth_uri"
+                ):
+                    data = dict(data)
+                    data["qr_png_base64"] = _otpauth_qr_png_b64(str(data["otpauth_uri"]))
+                self._send(*_json_bytes(data))
+                return
+
+            if path == "/api/auth/login/totp":
+                if not ctx.cloud:
+                    self._send(*_json_bytes({"error": "Cloud mode is not enabled"}, 400))
+                    return
+                try:
+                    data = ctx.cloud.login_totp(
+                        str(payload.get("temp_token", "")),
+                        str(payload.get("code", "")).replace(" ", ""),
+                    )
+                except CloudApiError as exc:
+                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 401))
+                    return
+                self._apply_session(data)
+                self._send(*_json_bytes({"status": "ok", "user": data.get("user")}))
+                return
+
+            if path == "/api/auth/mfa/enroll":
+                if not ctx.cloud:
+                    self._send(*_json_bytes({"error": "Cloud mode is not enabled"}, 400))
+                    return
+                try:
+                    data = ctx.cloud.enroll_mfa(
+                        str(payload.get("temp_token", "")),
+                        str(payload.get("code", "")).replace(" ", ""),
+                    )
+                except CloudApiError as exc:
+                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 401))
+                    return
+                self._apply_session(data)
+                self._send(*_json_bytes({"status": "ok", "user": data.get("user")}))
+                return
+
+            if path == "/api/auth/logout":
+                if ctx.cloud:
+                    ctx.cloud.set_token("")
+                ctx.auth_user = None
+                clear_cloud_session()
+                self._send(*_json_bytes({"ok": True}))
+                return
+
+            if path == "/api/users":
+                denied = ctx.require_cloud_roles("admin")
+                if denied:
+                    self._send(*denied)
+                    return
+                assert ctx.cloud is not None
+                try:
+                    data = ctx.cloud.create_user(
+                        str(payload.get("username", "")).strip(),
+                        str(payload.get("password", "")),
+                        str(payload.get("role", "operator")),
+                    )
+                except CloudApiError as exc:
+                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 400))
+                    return
+                self._send(*_json_bytes(data))
+                return
+
+            if path.endswith("/reset-mfa") and path.startswith("/api/users/"):
+                denied = ctx.require_cloud_roles("admin")
+                if denied:
+                    self._send(*denied)
+                    return
+                assert ctx.cloud is not None
+                user_id = int(path.split("/")[3])
+                try:
+                    data = ctx.cloud.reset_mfa(user_id)
+                except CloudApiError as exc:
+                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 400))
+                    return
+                self._send(*_json_bytes(data))
+                return
+
             if path == "/api/sites":
+                denied = ctx.require_cloud_roles("admin", "operator")
+                if denied:
+                    self._send(*denied)
+                    return
                 url = str(payload.get("url", "")).strip()
                 if not url:
                     self._send(*_json_bytes({"error": "Type a website first"}, 400))
@@ -508,6 +717,10 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path == "/api/sites/clear-all":
+                denied = ctx.require_cloud_roles("admin")
+                if denied:
+                    self._send(*denied)
+                    return
                 if str(payload.get("confirm", "")).strip() != "remove-all":
                     self._send(
                         *_json_bytes(
@@ -584,6 +797,10 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path == "/api/import":
+                denied = ctx.require_cloud_roles("admin", "operator")
+                if denied:
+                    self._send(*denied)
+                    return
                 filename = str(payload.get("filename", "")).strip() or "import.csv"
                 content_b64 = str(payload.get("content_base64", "")).strip()
                 if not content_b64:
@@ -645,6 +862,10 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path.endswith("/scan") and path.startswith("/api/sites/"):
+                denied = ctx.require_cloud_roles("admin", "operator")
+                if denied:
+                    self._send(*denied)
+                    return
                 site_id = int(path.split("/")[3])
                 site = ctx.websites.get_website(site_id)
                 if site is None:
@@ -723,8 +944,28 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
             self._send(*_json_bytes({"error": "Not found"}, 404))
 
         def do_PUT(self) -> None:  # noqa: N802
-            if urlparse(self.path).path != "/api/settings":
+            path = urlparse(self.path).path
+            if path.startswith("/api/users/"):
+                denied = ctx.require_cloud_roles("admin")
+                if denied:
+                    self._send(*denied)
+                    return
+                assert ctx.cloud is not None
+                user_id = int(path.rsplit("/", 1)[-1])
+                payload = self._read_json()
+                try:
+                    data = ctx.cloud.patch_user(user_id, payload)
+                except CloudApiError as exc:
+                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 400))
+                    return
+                self._send(*_json_bytes(data))
+                return
+            if path != "/api/settings":
                 self._send(*_json_bytes({"error": "Not found"}, 404))
+                return
+            denied = ctx.require_cloud_roles("admin")
+            if denied:
+                self._send(*denied)
                 return
             payload = self._read_json()
             for key, value in payload.items():
@@ -733,8 +974,26 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
 
         def do_DELETE(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path.startswith("/api/users/"):
+                denied = ctx.require_cloud_roles("admin")
+                if denied:
+                    self._send(*denied)
+                    return
+                assert ctx.cloud is not None
+                user_id = int(path.rsplit("/", 1)[-1])
+                try:
+                    data = ctx.cloud.delete_user(user_id)
+                except CloudApiError as exc:
+                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 400))
+                    return
+                self._send(*_json_bytes(data))
+                return
             if not path.startswith("/api/sites/"):
                 self._send(*_json_bytes({"error": "Not found"}, 404))
+                return
+            denied = ctx.require_cloud_roles("admin")
+            if denied:
+                self._send(*denied)
                 return
             site_id = int(path.rsplit("/", 1)[-1])
             ctx.websites.delete_website(site_id)
@@ -749,9 +1008,10 @@ def start_server(
     settings: SettingsService,
     host: str = "127.0.0.1",
     port: int = 17865,
+    cloud_client: CloudApiClient | None = None,
 ) -> tuple[ThreadingHTTPServer, str]:
     """Start the local UI server. Prefers a stable port so refresh keeps working."""
-    ctx = AppContext(websites, scans, settings)
+    ctx = AppContext(websites, scans, settings, cloud_client=cloud_client)
     handler = make_handler(ctx)
     tried: list[int] = [port, 17866, 17867, 0]
     server: ThreadingHTTPServer | None = None

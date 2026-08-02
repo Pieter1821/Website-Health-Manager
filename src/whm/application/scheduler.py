@@ -70,7 +70,13 @@ class SchedulerService:
 
     def _tick(self) -> None:
         now = time.time()
-        for site in self._websites.list_websites():
+        try:
+            sites = self._websites.list_websites()
+        except Exception as exc:  # noqa: BLE001
+            # Cloud mode while signed out returns 404/401 — skip quietly.
+            logger.debug("Scheduler skipped listing websites: %s", exc)
+            return
+        for site in sites:
             if site.id is None:
                 continue
             interval_key = self._effective_interval(site)

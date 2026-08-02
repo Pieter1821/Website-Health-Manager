@@ -2,20 +2,30 @@
 
 Website Health Manager stays a **desktop app**. Cloudflare is only private remote storage: the installed app on each PC calls a locked-down HTTPS API and reads/writes the shared SQLite (D1) database.
 
-This is **not** a web app, login portal, or public site.
+This is **not** a public website. Access requires the desktop client header plus a signed-in user (username / password / TOTP) or the bootstrap API token for setup scripts.
 
 Local SQLite (`%USERPROFILE%\.whm\whm.db`) remains the default. Cloud mode is opt-in via `%USERPROFILE%\.whm\cloud.json`.
 
 ## What you get
 
-- One shared database for every desktop install that uses the same API URL + token
-- Same schema as local SQLite
-- Private API: bearer token + `X-WHM-Client: desktop`. Anything else gets a blank **404**
+- One shared database for every desktop install that points at the same API
+- **Authentication:** username + password + authenticator (TOTP / Google Authenticator)
+- **Authorization:** roles `admin` / `operator` / `viewer`
+- SMTP passwords and alert webhooks stay on each PC (never synced to D1)
 
 ## What stays on each PC
 
 - Health **scans** still run in the desktop app (from that machine)
-- Results are saved to D1 so colleagues see the same history in their desktop app
+- Alert credentials (SMTP / Slack / Teams / Discord / generic webhooks)
+- Results are saved to D1 so colleagues see the same history after they sign in
+
+## Roles
+
+| Role | Can do |
+|------|--------|
+| `viewer` | Read sites, checks, export |
+| `operator` | Also add/check/import sites |
+| `admin` | Also delete, clear-all, cloud settings, manage users / reset MFA |
 
 ---
 
@@ -34,58 +44,62 @@ Copy-Item wrangler.toml.example wrangler.toml   # local only — gitignored
 npm run db:create
 ```
 
-Paste the printed `database_id` into your **local** `wrangler.toml` (never commit this file):
-
-```toml
-database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-```
-
-The API token is stored only via `wrangler secret put` and in each user's `%USERPROFILE%\.whm\cloud.json` — not in the repo or installer.
+Paste the printed `database_id` into your **local** `wrangler.toml` (never commit this file).
 
 ```powershell
 npm run db:migrate:remote
-npx wrangler secret put WHM_API_TOKEN
+npm run db:migrate:users:remote
+npx wrangler secret put WHM_API_TOKEN      # bootstrap / migrate only
+npx wrangler secret put WHM_JWT_SECRET     # required for login sessions
 npm run deploy
 ```
 
-Note the API URL from deploy output (used only by the desktop app).
+Note the API URL from deploy output.
 
-Smoke test with the desktop headers (without them you get **404**):
+Optional: secret `WHM_ALLOWED_IPS` = comma-separated client IPs.
+
+Smoke test (bootstrap token still works as admin for scripts):
 
 ```powershell
-curl -H "Authorization: Bearer YOUR_TOKEN" -H "X-WHM-Client: desktop" https://whm-api.xxx.workers.dev/api/health
+curl -H "Authorization: Bearer YOUR_BOOTSTRAP_TOKEN" -H "X-WHM-Client: desktop" https://whm-api.xxx.workers.dev/api/health
 ```
-
-Optional: secret `WHM_ALLOWED_IPS` = comma-separated client IPs. Leave unset for token-only access.
 
 ## 3. Migrate local data → D1 (one-shot)
 
 ```powershell
-python -m whm.migrate_to_cloud --api-url https://whm-api.xxx.workers.dev --token YOUR_TOKEN --dry-run
-python -m whm.migrate_to_cloud --api-url https://whm-api.xxx.workers.dev --token YOUR_TOKEN --yes --save-config
+python -m whm.migrate_to_cloud --api-url https://whm-api.xxx.workers.dev --token YOUR_BOOTSTRAP_TOKEN --dry-run
+python -m whm.migrate_to_cloud --api-url https://whm-api.xxx.workers.dev --token YOUR_BOOTSTRAP_TOKEN --yes --save-config --bootstrap-user admin --bootstrap-password "a-long-password"
 ```
 
-Local DB is left untouched. `--save-config` writes `%USERPROFILE%\.whm\cloud.json`.
+Local DB is left untouched. Secret settings are **not** uploaded. `--bootstrap-user` creates the first admin when the users table is empty.
 
-## 4. Point the desktop app at the cloud
+## 4. Sign in from the desktop app
 
-`%USERPROFILE%\.whm\cloud.json`:
+`%USERPROFILE%\.whm\cloud.json` only needs the API URL (session JWT is written after login):
 
 ```json
 {
-  "api_url": "https://whm-api.xxx.workers.dev",
-  "api_token": "YOUR_TOKEN"
+  "api_url": "https://whm-api.xxx.workers.dev"
 }
 ```
 
-Or env vars `WHM_API_URL` / `WHM_API_TOKEN`. Force local storage: `$env:WHM_STORAGE = "local"`.
+1. Open Website Health Manager.
+2. Sign in with username + password.
+3. On first login, scan the QR with an authenticator app and confirm the 6-digit code ([TOTP / PyOTP-compatible](https://pyauth.github.io/pyotp/)).
+4. Admins can open **Users** to create operators/viewers or reset MFA.
 
-Share URL + token only with people who should use the shared DB (treat the token like a password).
+Force local storage: `$env:WHM_STORAGE = "local"`.
+
+## Recovery
+
+- Lost authenticator: an **admin** uses **Users → Reset MFA** for that account; next login re-enrolls.
+- Lost admin access: use `WHM_API_TOKEN` with `POST /api/auth/bootstrap` only if the users table is empty, or reset MFA / create users via a remaining admin session.
 
 ## Project files
 
 | Path | Role |
 |------|------|
-| `cloudflare/whm-api/` | Private HTTPS API + D1 schema |
+| `cloudflare/whm-api/` | Private HTTPS API + D1 schema + auth |
 | `src/whm/infrastructure/cloud_*.py` | Desktop HTTPS client + repositories |
+| `src/whm/infrastructure/hybrid_settings.py` | Local secrets + cloud non-secret settings |
 | `src/whm/migrate_to_cloud.py` | Local → D1 export from this PC |

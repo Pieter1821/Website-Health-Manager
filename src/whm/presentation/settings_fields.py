@@ -51,28 +51,27 @@ SETTINGS_FIELDS: list[tuple[str, str, str, str]] = [
         "slack_webhook",
         "Slack webhook",
         "Paste a Slack Incoming Webhook URL to post alerts into a channel. "
-        "Leave blank to skip Slack. Create the webhook in your Slack workspace settings.",
+        "Stored only on this computer (not synced to the cloud). Leave blank to skip Slack.",
         "https://hooks.slack.com/services/…",
     ),
     (
         "discord_webhook",
         "Discord webhook",
         "Paste a Discord channel webhook URL to post alerts. "
-        "Leave blank to skip Discord. Create it under the channel’s Integrations settings.",
+        "Stored only on this computer (not synced to the cloud). Leave blank to skip Discord.",
         "https://discord.com/api/webhooks/…",
     ),
     (
         "teams_webhook",
         "Teams webhook",
         "Paste a Microsoft Teams Incoming Webhook URL to post alerts to a channel. "
-        "Leave blank to skip Teams.",
+        "Stored only on this computer (not synced to the cloud). Leave blank to skip Teams.",
         "https://….webhook.office.com/…",
     ),
     (
         "generic_webhook",
         "Generic webhook",
-        "Any HTTPS URL that accepts a JSON POST. When an alert fires, WHM sends the site name, "
-        "status, risk, and a short message. Useful for Zapier, Power Automate, or your own API. "
+        "Any HTTPS URL that accepts a JSON POST. Stored only on this computer (not synced to the cloud). "
         "Leave blank to skip.",
         "https://…",
     ),
@@ -80,7 +79,7 @@ SETTINGS_FIELDS: list[tuple[str, str, str, str]] = [
         "smtp_host",
         "SMTP host",
         "Mail server used to send email alerts (example: smtp.office365.com or smtp.gmail.com). "
-        "Leave blank if you do not want email alerts.",
+        "Stored only on this computer. Leave blank if you do not want email alerts.",
         "Needed only for email alerts",
     ),
     (
@@ -98,8 +97,8 @@ SETTINGS_FIELDS: list[tuple[str, str, str, str]] = [
     (
         "smtp_password",
         "SMTP password",
-        "Password or app password for the mail server. Stored only in your WHM database on this computer — "
-        "not uploaded anywhere.",
+        "Password or app password for the mail server. Always stored only on this computer "
+        "(never synced to Cloudflare D1), even when websites use cloud storage.",
         "Use an app password when your provider offers one",
     ),
     (

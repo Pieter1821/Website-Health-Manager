@@ -64,12 +64,15 @@ def launch_web_desktop(
     scans: HealthScanService,
     settings: SettingsService,
     scheduler: Optional[SchedulerService] = None,
+    cloud_client=None,
 ) -> int:
     """
     Start local API + open Edge/Chrome in app mode (frameless desktop feel).
     Returns process exit code-ish (0 on clean close).
     """
-    server, url = start_server(websites, scans, settings)
+    server, url = start_server(
+        websites, scans, settings, cloud_client=cloud_client
+    )
     if scheduler:
         scheduler.start()
 

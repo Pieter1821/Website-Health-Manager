@@ -11,5 +11,7 @@ binding = "DB"
 database_name = "whm-db"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"
 
-# Set with: npx wrangler secret put WHM_API_TOKEN
-# Do NOT put WHM_API_TOKEN in this file or in [vars].
+# Set with:
+#   npx wrangler secret put WHM_API_TOKEN    # bootstrap / migrate scripts only
+#   npx wrangler secret put WHM_JWT_SECRET   # required for username/password sessions
+# Do NOT put secrets in this file or in [vars].
