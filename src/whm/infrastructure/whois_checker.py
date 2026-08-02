@@ -6,7 +6,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-import whois
+from whois.parser import WhoisEntry
+from whois.whois import NICClient
 
 from whm.domain.hostnames import normalize_hostname, registrable_domain
 from whm.domain.models import Finding, FindingStatus, HealthStatus
@@ -84,6 +85,27 @@ def _unavailable(domain: str, queried: str, reason: str) -> dict[str, Any]:
     }
 
 
+def _whois_lookup(queried: str, timeout: int = 10) -> Any:
+    """
+    Query WHOIS for an already-normalized registrable domain.
+
+    Avoids python-whois extract_domain(), which needs public_suffix_list.dat —
+    that file is often missing from frozen Windows builds and breaks Domain expires.
+    """
+    nic_client = NICClient()
+    text = nic_client.whois_lookup(
+        None,
+        queried,
+        0,
+        quiet=True,
+        ignore_socket_errors=True,
+        timeout=timeout,
+    )
+    if not text:
+        raise RuntimeError("WHOIS returned no output")
+    return WhoisEntry.load(queried, text)
+
+
 def check_domain(domain: str) -> dict[str, Any]:
     """Look up WHOIS on the registrable domain and evaluate expiry."""
     input_host = normalize_hostname(domain)
@@ -105,24 +127,32 @@ def check_domain(domain: str) -> dict[str, Any]:
         )
 
     try:
-        data = whois.whois(queried)
+        data = _whois_lookup(queried)
     except Exception as exc:  # noqa: BLE001 — WHOIS is flaky / often blocked
         logger.info("WHOIS lookup failed for %s (from %s): %s", queried, input_host, exc)
         return _unavailable(input_host, queried, str(exc))
 
     if data is None or (
         not getattr(data, "domain_name", None)
+        and not (isinstance(data, dict) and data.get("domain_name"))
         and not getattr(data, "expiration_date", None)
+        and not (isinstance(data, dict) and data.get("expiration_date"))
         and not getattr(data, "registrar", None)
+        and not (isinstance(data, dict) and data.get("registrar"))
     ):
         logger.info("WHOIS returned empty data for %s", queried)
         return _unavailable(input_host, queried, "empty response (DNS or registry unreachable)")
 
-    expiry = _as_datetime(getattr(data, "expiration_date", None))
-    created = _as_datetime(getattr(data, "creation_date", None))
-    updated = _as_datetime(getattr(data, "updated_date", None))
-    registrar = getattr(data, "registrar", None)
-    status_field = getattr(data, "status", None)
+    def _get(name: str) -> Any:
+        if isinstance(data, dict):
+            return data.get(name)
+        return getattr(data, name, None)
+
+    expiry = _as_datetime(_get("expiration_date"))
+    created = _as_datetime(_get("creation_date"))
+    updated = _as_datetime(_get("updated_date"))
+    registrar = _get("registrar")
+    status_field = _get("status")
     if isinstance(status_field, list):
         status_field = ", ".join(str(s) for s in status_field)
 

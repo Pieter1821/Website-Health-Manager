@@ -1,13 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Build: pyinstaller --noconfirm packaging/whm.spec
 
+from PyInstaller.utils.hooks import collect_data_files
+
 block_cipher = None
+
+# python-whois ships public_suffix_list.dat under whois/data — required if any
+# code path still calls whois.extract_domain() inside a frozen build.
+whois_datas = collect_data_files("whois")
 
 a = Analysis(
     ['../src/whm/__main__.py'],
     pathex=['../src'],
     binaries=[],
-    datas=[('../src/whm/presentation/web', 'whm/presentation/web')],
+    datas=[('../src/whm/presentation/web', 'whm/presentation/web')] + whois_datas,
     hiddenimports=[
         'whm',
         'whm.main',
@@ -35,6 +41,8 @@ a = Analysis(
         'certifi',
         'cryptography',
         'whois',
+        'whois.whois',
+        'whois.parser',
     ],
     hookspath=[],
     hooksconfig={},

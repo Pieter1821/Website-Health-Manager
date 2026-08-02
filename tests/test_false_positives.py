@@ -171,7 +171,7 @@ def test_ssl_cert_verify_failure_is_critical():
 
 
 def test_whois_exception_is_unknown_not_critical():
-    with patch("whm.infrastructure.whois_checker.whois.whois", side_effect=Exception("getaddrinfo failed")):
+    with patch("whm.infrastructure.whois_checker._whois_lookup", side_effect=Exception("getaddrinfo failed")):
         result = check_domain("example.com")
     assert result["status"] == HealthStatus.UNKNOWN
     assert result["findings"][0].status == FindingStatus.INFO
@@ -182,7 +182,7 @@ def test_whois_empty_object_is_unknown():
     empty.domain_name = None
     empty.expiration_date = None
     empty.registrar = None
-    with patch("whm.infrastructure.whois_checker.whois.whois", return_value=empty):
+    with patch("whm.infrastructure.whois_checker._whois_lookup", return_value=empty):
         result = check_domain("example.com")
     assert result["status"] == HealthStatus.UNKNOWN
 
@@ -195,7 +195,7 @@ def test_whois_expiry_soon_is_warning_or_critical():
     data.updated_date = None
     data.registrar = "Example Registrar"
     data.status = None
-    with patch("whm.infrastructure.whois_checker.whois.whois", return_value=data):
+    with patch("whm.infrastructure.whois_checker._whois_lookup", return_value=data):
         result = check_domain("example.com")
     assert result["status"] == HealthStatus.WARNING
 

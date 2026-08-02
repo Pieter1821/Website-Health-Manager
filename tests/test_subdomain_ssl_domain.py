@@ -66,7 +66,9 @@ def test_whois_uses_registrable_domain_for_subdomain():
     data.updated_date = None
     data.registrar = "Test Registrar"
     data.status = None
-    with patch("whm.infrastructure.whois_checker.whois.whois", return_value=data) as mocked:
+    with patch(
+        "whm.infrastructure.whois_checker._whois_lookup", return_value=data
+    ) as mocked:
         result = check_domain("s1.thinaloans.co.za")
     mocked.assert_called_once_with("thinaloans.co.za")
     assert result["raw"]["queried_domain"] == "thinaloans.co.za"
@@ -80,11 +82,44 @@ def test_whois_empty_co_za_is_unknown_not_guessed():
     empty.domain_name = None
     empty.expiration_date = None
     empty.registrar = None
-    with patch("whm.infrastructure.whois_checker.whois.whois", return_value=empty):
+    with patch("whm.infrastructure.whois_checker._whois_lookup", return_value=empty):
         result = check_domain("thinaloans.co.za")
     assert result["status"] == HealthStatus.UNKNOWN
     assert result["raw"].get("expiration_date") is None
     assert any(f.title == "Domain expiry unknown" for f in result["findings"])
+
+
+def test_whois_lookup_does_not_require_public_suffix_list(monkeypatch):
+    """Frozen builds often lack whois/data/public_suffix_list.dat — still must work."""
+    from whm.infrastructure import whois_checker
+
+    class FakeNIC:
+        def whois_lookup(self, *a, **k):
+            return "Domain Name: EXAMPLE.COM\nRegistrar: Example Registrar\nRegistry Expiry Date: 2027-06-01T00:00:00Z\n"
+
+    class FakeEntry(dict):
+        def __getattr__(self, item):
+            try:
+                return self[item]
+            except KeyError as exc:
+                raise AttributeError(item) from exc
+
+    def fake_load(domain, text):
+        return FakeEntry(
+            domain_name=domain,
+            expiration_date=datetime(2027, 6, 1, tzinfo=timezone.utc),
+            creation_date=None,
+            updated_date=None,
+            registrar="Example Registrar",
+            status=None,
+        )
+
+    monkeypatch.setattr(whois_checker, "NICClient", FakeNIC)
+    monkeypatch.setattr(whois_checker.WhoisEntry, "load", staticmethod(fake_load))
+    result = check_domain("www.example.com")
+    assert result["status"] == HealthStatus.HEALTHY
+    assert result["raw"]["queried_domain"] == "example.com"
+    assert result["raw"]["expiration_date"] is not None
 
 
 def test_dangling_cname_is_critical_finding():
