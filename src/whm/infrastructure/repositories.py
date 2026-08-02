@@ -109,6 +109,15 @@ class SqliteCustomerRepository(CustomerRepository):
             ).fetchone()
             return self._row_to_customer(row) if row else None
 
+    def delete(self, customer_id: int) -> None:
+        with locked(self._conn):
+            self._conn.execute(
+                "UPDATE websites SET customer_id = NULL WHERE customer_id = ?",
+                (customer_id,),
+            )
+            self._conn.execute("DELETE FROM customers WHERE id = ?", (customer_id,))
+            self._conn.commit()
+
     @staticmethod
     def _row_to_customer(row: sqlite3.Row) -> Customer:
         return Customer(

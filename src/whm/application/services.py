@@ -122,12 +122,30 @@ class WebsiteService:
         self._websites.delete(website_id)
 
     def delete_all_websites(self) -> int:
-        """Remove every website and its history. Returns how many were deleted."""
+        """Remove every website (and orphan customers). Returns how many sites were deleted."""
         sites = list(self._websites.list_all())
         for site in sites:
             if site.id is not None:
                 self._websites.delete(site.id)
+        # Customers with no remaining sites would still clog the filter — clear them.
+        for customer in list(self._customers.list_all()):
+            if customer.id is not None:
+                self._customers.delete(customer.id)
         return len(sites)
+
+    def purge_unused_customers(self) -> int:
+        """Delete customers that are not linked to any website."""
+        used = {
+            site.customer_id
+            for site in self._websites.list_all()
+            if site.customer_id is not None
+        }
+        removed = 0
+        for customer in list(self._customers.list_all()):
+            if customer.id is not None and customer.id not in used:
+                self._customers.delete(customer.id)
+                removed += 1
+        return removed
 
     def import_list(self, filename: str, data: bytes) -> ImportResult:
         """Import websites from an Excel (.xlsx) or CSV file."""

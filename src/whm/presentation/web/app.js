@@ -402,12 +402,26 @@ function renderSummary() {
 
 function renderCustomerFilter() {
   if (!el.customerFilter) return;
-  const selected = state.customerFilter;
+  // Only customers that still have at least one website (not leftovers).
   const names = new Map();
-  state.customers.forEach((c) => names.set(String(c.id), c.name));
   state.sites.forEach((s) => {
-    if (s.customer_id && s.customer_name) names.set(String(s.customer_id), s.customer_name);
+    if (s.customer_id && s.customer_name) {
+      names.set(String(s.customer_id), s.customer_name);
+    }
   });
+  if (names.size === 0) {
+    state.customerFilter = "";
+    el.customerFilter.innerHTML = '<option value="">All customers</option>';
+    el.customerFilter.disabled = true;
+    el.customerFilter.title = "Add an optional customer when you Check a site, or import a Client column";
+    return;
+  }
+  el.customerFilter.disabled = false;
+  el.customerFilter.title = "Show websites for one customer";
+  const selected = names.has(String(state.customerFilter))
+    ? String(state.customerFilter)
+    : "";
+  state.customerFilter = selected;
   const options = ['<option value="">All customers</option>'];
   [...names.entries()]
     .sort((a, b) => a[1].localeCompare(b[1], undefined, { sensitivity: "base" }))
@@ -861,6 +875,39 @@ async function offerUpdate(info, { quiet = false } = {}) {
   }
 }
 
+async function showImportResult(result) {
+  const added = result.added_count ?? (result.added || []).length;
+  const summary = result.summary || "Import finished";
+  const tip = (result.tip || "").trim();
+  const title = result.title || "Import";
+  const tone = result.tone || (added > 0 ? "ok" : "warn");
+
+  if (tone === "ok" && added > 0) {
+    setStatus(summary);
+    toast(summary, { type: "ok", duration: 4800 });
+    return;
+  }
+  if (tone === "ok" && added === 0) {
+    setStatus(summary);
+    toast(summary, { type: "ok", duration: 4800 });
+    return;
+  }
+
+  // Partial or failed — show a calm dialog with a tip (easier to read than a toast).
+  const body = tip ? `${summary}\n\n${tip}` : summary;
+  setStatus(added > 0 ? summary : "");
+  await askConfirm({
+    title,
+    message: body,
+    confirmLabel: "Got it",
+    cancelLabel: "Close",
+    danger: false,
+  });
+  if (added > 0) {
+    toast(summary, { type: "warn", duration: 4200 });
+  }
+}
+
 async function checkForUpdates({ quiet = false } = {}) {
   try {
     if (!quiet) {
@@ -946,6 +993,7 @@ function bind() {
         state.detail = null;
         showView("list");
         await loadSites();
+        setStatus("");
         toast(`Removed ${result.removed ?? 0} websites`, { type: "ok" });
       } catch (err) {
         toast(err.message || "Couldn’t remove websites", { type: "error" });
@@ -1005,6 +1053,19 @@ function bind() {
     const file = importInput.files && importInput.files[0];
     importInput.value = "";
     if (!file) return;
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith(".xls") && !lower.endsWith(".xlsx")) {
+      await askConfirm({
+        title: "Save as a newer Excel file",
+        message:
+          "Older .xls files aren’t supported.\n\n" +
+          "In Excel: File → Save As → Excel Workbook (.xlsx) or CSV, then use Import list again.",
+        confirmLabel: "Got it",
+        cancelLabel: "Close",
+        danger: false,
+      });
+      return;
+    }
     setStatus(`Importing ${file.name}…`);
     showLoader(`Importing ${file.name}…`);
     try {
@@ -1021,12 +1082,18 @@ function bind() {
         body: JSON.stringify({ filename: file.name, content_base64 }),
       });
       await loadSites();
-      const summary = result.summary || "Import finished";
-      setStatus(summary);
-      toast(summary);
+      await showImportResult(result);
     } catch (err) {
-      toast(err.message || "Import didn’t finish", { type: "error" });
-      setStatus("Import didn’t finish");
+      setStatus("");
+      await askConfirm({
+        title: "Import didn’t work",
+        message:
+          (err.message || "Something went wrong reading that file.") +
+          "\n\nTip: save as .xlsx or CSV UTF-8 from Excel, with a column of real addresses like example.com.",
+        confirmLabel: "Got it",
+        cancelLabel: "Close",
+        danger: false,
+      });
     } finally {
       if (!state.scanning) hideLoader();
     }

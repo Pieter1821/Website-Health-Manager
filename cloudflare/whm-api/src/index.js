@@ -140,6 +140,12 @@ async function route(request, env, url, path) {
     if (!row) return json({ error: "Not found" }, 404);
     return json(row);
   }
+  if (method === "DELETE" && m) {
+    const id = Number(m[1]);
+    await db.prepare("UPDATE websites SET customer_id = NULL WHERE customer_id = ?").bind(id).run();
+    await db.prepare("DELETE FROM customers WHERE id = ?").bind(id).run();
+    return json({ ok: true });
+  }
 
   // --- websites ---
   if (method === "GET" && path === "/api/websites") {

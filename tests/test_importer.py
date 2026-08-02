@@ -61,6 +61,76 @@ def test_parse_csv_single_column():
     assert [r.url for r in rows] == ["example.com", "foo.co.za"]
 
 
+def test_brand_names_are_not_urls_when_domain_column_exists():
+    """Sheets often have Company + Website URL; brand names must not become URLs."""
+    data = (
+        b"Website,URL\n"
+        b"Amazon,https://www.amazon.com\n"
+        b"Apple,https://www.apple.com\n"
+        b"Cloudflare,https://www.cloudflare.com\n"
+    )
+    rows = parse_csv_bytes(data)
+    assert len(rows) == 3
+    assert rows[0].url == "https://www.amazon.com"
+    assert rows[0].display_name == "Amazon"
+    assert rows[1].url == "https://www.apple.com"
+    assert all("Amazon" not in r.url and "Apple" not in r.url for r in rows)
+
+
+def test_messy_sheet_finds_domain_without_url_header():
+    data = (
+        b"Company,Primary site,Notes\n"
+        b"Amazon,amazon.com,retail\n"
+        b"Local Cafe,not-a-domain,skip me\n"
+        b"Acme,https://acme.example/path,ok\n"
+    )
+    rows = parse_csv_bytes(data)
+    assert [r.url for r in rows] == ["amazon.com", "https://acme.example/path"]
+    assert rows[0].display_name == "Amazon" or rows[0].customer == "Amazon"
+
+
+def test_friendly_success_summary():
+    from whm.infrastructure.importer import ImportResult
+
+    ok = ImportResult(added=["a.com", "b.com"], skipped=["a.com"])
+    assert "Imported 2 websites" in ok.summary
+    assert ok.tone == "ok"
+    assert ok.title == "Import complete"
+
+
+def test_friendly_parse_error_xls():
+    from whm.infrastructure.importer import friendly_parse_error
+
+    msg = friendly_parse_error(ValueError("old .xls"), "clients.xls")
+    assert ".xlsx" in msg
+    assert "clients.xls" in msg
+
+
+def test_brand_only_column_does_not_spam_errors():
+
+    from whm.infrastructure.importer import apply_import
+
+    class C:
+        def __init__(self, name):
+            self.id = 1
+
+    rows = parse_csv_bytes(b"Website\nAmazon\nApple\nCloudflare\n")
+    result = apply_import(
+        rows,
+        existing_domains=set(),
+        add_customer=lambda name: C(name),
+        add_website=lambda **kwargs: None,
+        extract_domain=lambda url: url,
+    )
+    # No valid domains -> one clear message, not one error per brand name.
+    assert result.added == []
+    assert len(result.errors) == 1
+    assert "No website addresses found" in result.errors[0]
+    assert result.tone == "error"
+    assert "example.com" in result.tip
+    assert "Couldn’t import" in result.title or "import" in result.title.lower()
+
+
 def test_skips_instruction_row_above_header():
     data = (
         b"Fill in one row per website below, then use Import list in WHM. "
@@ -121,6 +191,7 @@ def test_invalid_url_reports_row_number():
     assert len(result.errors) == 1
     assert "Row 4" in result.errors[0]
     assert "Row 4" in result.summary
+    assert result.tone == "error"
 
 
 def test_parse_xlsx_client_website_structure(tmp_path):

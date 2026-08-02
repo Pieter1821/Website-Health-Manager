@@ -44,7 +44,7 @@ Paste a site (or import a list), press **Check**, and see whether the website op
 
 ### Recommended install
 
-1. Download **[WebsiteHealthManager-Setup-0.1.3.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.3/WebsiteHealthManager-Setup-0.1.3.exe)** from the [latest release](https://github.com/Pieter1821/Website-Health-Manager/releases/latest).
+1. Download **[WebsiteHealthManager-Setup-0.1.4.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.4/WebsiteHealthManager-Setup-0.1.4.exe)** from the [latest release](https://github.com/Pieter1821/Website-Health-Manager/releases/latest).
 2. Double-click the setup → **Next** → **Install**.
 3. Open **Website Health Manager** from the Start menu or desktop shortcut.
 4. Chrome opens the WHM window.

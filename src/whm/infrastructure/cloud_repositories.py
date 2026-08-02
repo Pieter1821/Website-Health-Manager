@@ -164,6 +164,9 @@ class CloudCustomerRepository(CustomerRepository):
             raise
         return _row_to_customer(row)
 
+    def delete(self, customer_id: int) -> None:
+        self._api.delete(f"/api/customers/{customer_id}")
+
 
 class CloudWebsiteRepository(WebsiteRepository):
     def __init__(self, client: CloudApiClient) -> None:

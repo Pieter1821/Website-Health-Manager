@@ -366,27 +366,41 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path == "/api/sites":
+                # Drop leftover customer names that no longer have any sites.
+                try:
+                    ctx.websites.purge_unused_customers()
+                except Exception:  # noqa: BLE001
+                    logger.debug("Could not purge unused customers", exc_info=True)
                 customers = {
                     c.id: c.name
                     for c in ctx.websites.list_customers()
                     if c.id is not None
                 }
+                sites = ctx.websites.list_websites()
                 rows = [
                     serialize_site_row(
                         site,
                         ctx.scans.latest(site.id) if site.id else None,
                         customer_name=customers.get(site.customer_id or -1, ""),
                     )
-                    for site in ctx.websites.list_websites()
+                    for site in sites
                 ]
+                used_ids = {
+                    site.customer_id
+                    for site in sites
+                    if site.customer_id is not None
+                }
                 self._send(
                     *_json_bytes(
                         {
                             "sites": rows,
                             "customers": [
-                                {"id": c.id, "name": c.name}
-                                for c in ctx.websites.list_customers()
-                                if c.id is not None
+                                {"id": cid, "name": customers[cid]}
+                                for cid in sorted(
+                                    used_ids,
+                                    key=lambda i: customers.get(i, "").lower(),
+                                )
+                                if cid in customers
                             ],
                         }
                     )
@@ -573,33 +587,61 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 filename = str(payload.get("filename", "")).strip() or "import.csv"
                 content_b64 = str(payload.get("content_base64", "")).strip()
                 if not content_b64:
-                    self._send(*_json_bytes({"error": "No file content received"}, 400))
+                    self._send(
+                        *_json_bytes(
+                            {
+                                "error": (
+                                    "No file was received. Choose an Excel (.xlsx) "
+                                    "or CSV file and try again."
+                                )
+                            },
+                            400,
+                        )
+                    )
                     return
                 import base64
+
+                from whm.infrastructure.importer import friendly_parse_error
 
                 try:
                     raw = base64.b64decode(content_b64)
                 except Exception:  # noqa: BLE001
-                    self._send(*_json_bytes({"error": "Could not read the uploaded file"}, 400))
+                    self._send(
+                        *_json_bytes(
+                            {
+                                "error": (
+                                    f"Couldn’t read “{filename}”. "
+                                    "Try saving it again as .xlsx or CSV, then import."
+                                )
+                            },
+                            400,
+                        )
+                    )
+                    return
+                if not raw:
+                    self._send(
+                        *_json_bytes(
+                            {
+                                "error": (
+                                    f"“{filename}” looks empty. "
+                                    "Add website addresses and save, then import again."
+                                )
+                            },
+                            400,
+                        )
+                    )
                     return
                 try:
                     result = ctx.websites.import_list(filename, raw)
                 except Exception as exc:  # noqa: BLE001
-                    self._send(*_json_bytes({"error": str(exc)}, 400))
-                    return
-                self._send(
-                    *_json_bytes(
-                        {
-                            "summary": result.summary,
-                            "added": result.added,
-                            "skipped": result.skipped,
-                            "errors": result.errors,
-                            "added_count": len(result.added),
-                            "skipped_count": len(result.skipped),
-                            "error_count": len(result.errors),
-                        }
+                    self._send(
+                        *_json_bytes(
+                            {"error": friendly_parse_error(exc, filename)},
+                            400,
+                        )
                     )
-                )
+                    return
+                self._send(*_json_bytes(result.as_api_dict()))
                 return
 
             if path.endswith("/scan") and path.startswith("/api/sites/"):

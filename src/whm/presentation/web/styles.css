@@ -82,6 +82,10 @@ a:focus:not(:focus-visible) {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  /* Keep the busy spinner moving — it signals work in progress, not decoration. */
+  .progress-spinner {
+    animation: loader-spin 0.75s linear infinite !important;
+  }
 }
 
 .atmosphere {
@@ -1132,6 +1136,8 @@ th.sortable.sorted-desc .th-sort::after {
   border-top-color: var(--signal);
   animation: loader-spin 0.75s linear infinite;
   flex-shrink: 0;
+  will-change: transform;
+  transform-origin: center;
 }
 .progress-copy {
   min-width: 0;
@@ -1160,6 +1166,7 @@ th.sortable.sorted-desc .th-sort::after {
   white-space: nowrap;
 }
 @keyframes loader-spin {
+  from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 @keyframes progress-in {

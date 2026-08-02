@@ -23,6 +23,9 @@ class CustomerRepository(ABC):
     @abstractmethod
     def get(self, customer_id: int) -> Optional[Customer]: ...
 
+    @abstractmethod
+    def delete(self, customer_id: int) -> None: ...
+
 
 class WebsiteRepository(ABC):
     @abstractmethod
