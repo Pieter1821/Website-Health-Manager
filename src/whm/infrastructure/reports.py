@@ -75,6 +75,37 @@ def _action_findings(result: HealthCheckResult):
     return [f for f in _report_findings(result) if f.status in _ACTION_STATUSES]
 
 
+def _expiry_label(iso_date: object, days_remaining: object) -> str:
+    """Human-readable expiry for reports, e.g. '2027-03-15 (120 days left)'."""
+    date_part = ""
+    if isinstance(iso_date, str) and iso_date.strip():
+        date_part = iso_date.strip()[:10]
+    days_part = ""
+    if isinstance(days_remaining, (int, float)):
+        days = int(days_remaining)
+        if days < 0:
+            days_part = f"Expired {abs(days)} days ago"
+        elif days == 0:
+            days_part = "Expires today"
+        else:
+            days_part = f"{days} days left"
+    if date_part and days_part:
+        return f"{date_part} ({days_part})"
+    return date_part or days_part or "—"
+
+
+def _ssl_expiry_label(result: HealthCheckResult) -> str:
+    ssl_raw = (result.raw or {}).get("ssl") or {}
+    return _expiry_label(ssl_raw.get("not_after"), ssl_raw.get("days_remaining"))
+
+
+def _domain_expiry_label(result: HealthCheckResult) -> str:
+    whois_raw = (result.raw or {}).get("whois") or {}
+    return _expiry_label(
+        whois_raw.get("expiration_date"), whois_raw.get("days_remaining")
+    )
+
+
 def _status_fill(label: str) -> PatternFill:
     lower = label.lower()
     if "looks good" in lower or lower == "ok" or lower == "low":
@@ -163,19 +194,36 @@ def render_excel(website: Website, result: HealthCheckResult) -> bytes:
     row += 1
     summary.cell(row=row, column=1, value="Area scores").font = _TITLE_FONT
     row += 1
-    for label, status in (
-        ("Website opens", result.website_status),
-        ("Security certificate (SSL)", result.ssl_status),
-        ("Domain registration", result.domain_status),
-        ("Web address settings (DNS)", result.dns_status),
-    ):
-        row = _write_kv(
-            summary,
-            row,
-            label,
-            status_plain(status),
-            colour_value=True,
-        )
+    row = _write_kv(
+        summary,
+        row,
+        "Website opens",
+        status_plain(result.website_status),
+        colour_value=True,
+    )
+    row = _write_kv(
+        summary,
+        row,
+        "Security certificate (SSL)",
+        status_plain(result.ssl_status),
+        colour_value=True,
+    )
+    row = _write_kv(summary, row, "SSL expires", _ssl_expiry_label(result))
+    row = _write_kv(
+        summary,
+        row,
+        "Domain registration",
+        status_plain(result.domain_status),
+        colour_value=True,
+    )
+    row = _write_kv(summary, row, "Domain expires", _domain_expiry_label(result))
+    row = _write_kv(
+        summary,
+        row,
+        "Web address settings (DNS)",
+        status_plain(result.dns_status),
+        colour_value=True,
+    )
 
     row += 1
     row = _write_kv(
@@ -263,9 +311,11 @@ def render_csv(website: Website, result: HealthCheckResult) -> str:
             status_plain(result.ssl_status),
         ]
     )
+    writer.writerow(["Summary", "SSL expires", _ssl_expiry_label(result)])
     writer.writerow(
         ["Summary", "Domain registration", status_plain(result.domain_status)]
     )
+    writer.writerow(["Summary", "Domain expires", _domain_expiry_label(result)])
     writer.writerow(
         [
             "Summary",
@@ -370,7 +420,7 @@ def render_portfolio_excel(
     overview.title = "Overview"
     overview["A1"] = "Website Health Manager — All websites"
     overview["A1"].font = _TITLE_FONT
-    overview.merge_cells("A1:I1")
+    overview.merge_cells("A1:K1")
 
     headers = [
         "Website",
@@ -378,7 +428,9 @@ def render_portfolio_excel(
         "Overall",
         "Web",
         "SSL",
+        "SSL expires",
         "Domain reg.",
+        "Domain expires",
         "DNS",
         "Last checked",
         "Items to fix",
@@ -395,12 +447,15 @@ def render_portfolio_excel(
 
     problem_row = 2
     total_actions = 0
+    status_cols = {3, 4, 5, 7, 9}
     for idx, (site, result) in enumerate(rows, start=4):
         if result is None:
             values = [
                 site.display_name,
                 site.domain,
                 "Not checked yet",
+                "—",
+                "—",
                 "—",
                 "—",
                 "—",
@@ -417,7 +472,9 @@ def render_portfolio_excel(
                 status_plain(result.overall_status),
                 status_plain(result.website_status),
                 status_plain(result.ssl_status),
+                _ssl_expiry_label(result),
                 status_plain(result.domain_status),
+                _domain_expiry_label(result),
                 status_plain(result.dns_status),
                 result.checked_at.strftime("%Y-%m-%d %H:%M"),
                 str(len(actions)),
@@ -447,7 +504,7 @@ def render_portfolio_excel(
             cell.font = _BODY_FONT
             cell.alignment = _WRAP
             cell.border = _THIN
-            if col in {3, 4, 5, 6, 7}:
+            if col in status_cols:
                 cell.fill = _status_fill(str(value))
 
     if problem_row == 2:
@@ -462,7 +519,7 @@ def render_portfolio_excel(
 
     overview.cell(row=2, column=1, value=f"Sites: {len(rows)} · Items to fix: {total_actions}")
     overview["A2"].font = _BODY_FONT
-    _set_widths(overview, [22, 22, 14, 12, 12, 14, 12, 16, 12])
+    _set_widths(overview, [22, 22, 14, 12, 12, 28, 14, 28, 12, 16, 12])
     _set_widths(problems, [22, 22, 22, 12, 26, 40, 40])
     overview.freeze_panes = "A4"
     problems.freeze_panes = "A2"
@@ -485,7 +542,9 @@ def render_portfolio_csv(
             "Overall",
             "Web",
             "SSL",
+            "SSL expires",
             "Domain reg.",
+            "Domain expires",
             "DNS",
             "Last checked",
             "Items to fix",
@@ -498,6 +557,8 @@ def render_portfolio_csv(
                     site.display_name,
                     site.domain,
                     "Not checked yet",
+                    "—",
+                    "—",
                     "—",
                     "—",
                     "—",
@@ -515,7 +576,9 @@ def render_portfolio_csv(
                     status_plain(result.overall_status),
                     status_plain(result.website_status),
                     status_plain(result.ssl_status),
+                    _ssl_expiry_label(result),
                     status_plain(result.domain_status),
+                    _domain_expiry_label(result),
                     status_plain(result.dns_status),
                     result.checked_at.strftime("%Y-%m-%d %H:%M"),
                     str(len(actions)),

@@ -58,6 +58,10 @@ def _sample():
                 "should not appear",
             ),
         ],
+        raw={
+            "ssl": {"not_after": "2026-09-01T12:00:00+00:00", "days_remaining": 30},
+            "whois": {"expiration_date": "2027-01-15", "days_remaining": 166},
+        },
     )
     return site, result
 
@@ -91,9 +95,26 @@ def test_export_excel_and_csv(tmp_path: Path):
     text = csv_path.read_text(encoding="utf-8-sig")
     assert "Certificate expiring soon" in text
     assert "Renew the certificate" in text
+    assert "SSL expires" in text
+    assert "2026-09-01 (30 days left)" in text
+    assert "Domain expires" in text
+    assert "2027-01-15 (166 days left)" in text
     assert "SPF missing" not in text
     assert "HSTS missing" not in text
     assert "\nSummary,Email," not in text
+    summary = wb["Summary"]
+    assert any(
+        c.value == "SSL expires" and summary.cell(row=c.row, column=2).value
+        == "2026-09-01 (30 days left)"
+        for row in summary.iter_rows(min_col=1, max_col=1)
+        for c in row
+    )
+    assert any(
+        c.value == "Domain expires" and summary.cell(row=c.row, column=2).value
+        == "2027-01-15 (166 days left)"
+        for row in summary.iter_rows(min_col=1, max_col=1)
+        for c in row
+    )
 
 
 def test_build_excel_and_csv_bytes():
@@ -196,7 +217,13 @@ def test_portfolio_excel_includes_all_sites(tmp_path: Path, monkeypatch):
     wb = load_workbook(BytesIO(payload))
     assert wb.sheetnames == ["Overview", "Problems to fix"]
     assert wb["Overview"]["A4"].value == "Example"
+    assert wb["Overview"]["F3"].value == "SSL expires"
+    assert wb["Overview"]["H3"].value == "Domain expires"
+    assert wb["Overview"]["F4"].value == "2026-09-01 (30 days left)"
+    assert wb["Overview"]["H4"].value == "2027-01-15 (166 days left)"
     assert wb["Overview"]["C5"].value == "Not checked yet"
+    assert wb["Overview"]["F5"].value == "—"
+    assert wb["Overview"]["H5"].value == "—"
     assert wb["Problems to fix"]["A2"].value == "Example"
     assert wb["Problems to fix"]["E2"].value == "Certificate expiring soon"
 
