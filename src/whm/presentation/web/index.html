@@ -63,6 +63,7 @@
         <header class="work-head">
           <div>
             <h2 id="websites-heading">Websites</h2>
+            <p id="list-summary" class="list-summary" aria-live="polite"></p>
             <p id="status-line" class="muted status-line" aria-live="polite"></p>
           </div>
           <div class="work-actions">
@@ -73,20 +74,58 @@
             <button type="button" class="btn-primary" id="check-all-btn">Check all</button>
             <button type="button" class="btn-ghost" id="export-all-excel-btn" title="Save an Excel report for every website into Downloads">Export all</button>
             <button type="button" class="btn-ghost" id="refresh-btn">Refresh</button>
+            <button type="button" class="btn-danger" id="remove-all-btn" title="Remove every website from this list">Remove all</button>
           </div>
         </header>
+
+        <div class="list-filters" id="list-filters">
+          <div class="filter-group" role="group" aria-label="Filter by status">
+            <button type="button" class="filter-chip active" data-status-filter="all">All</button>
+            <button type="button" class="filter-chip" data-status-filter="critical">Needs a fix</button>
+            <button type="button" class="filter-chip" data-status-filter="warning">Worth a look</button>
+            <button type="button" class="filter-chip" data-status-filter="healthy">Looks good</button>
+            <button type="button" class="filter-chip" data-status-filter="unknown">Couldn’t finish</button>
+          </div>
+          <label class="customer-filter">
+            <span class="sr-only">Filter by customer</span>
+            <select id="customer-filter" aria-label="Filter by customer">
+              <option value="">All customers</option>
+            </select>
+          </label>
+        </div>
 
         <div class="table-wrap sites-wrap fullscreen-panel" id="sites-wrap">
           <table class="data-table sites-table" id="sites-table">
             <thead>
               <tr>
-                <th>Website <button type="button" class="info-btn" data-tip="The site you are watching." aria-label="About Website">i</button></th>
-                <th>Status <button type="button" class="info-btn" data-tip="Red = Needs a fix. Amber = Worth a look. Green = Looks good. Grey = Couldn’t finish. The line under Status points to the area to open." aria-label="About Status">i</button></th>
-                <th>Web <button type="button" class="info-btn" data-tip="Can people open the website in a browser right now?" aria-label="About Web">i</button></th>
-                <th>SSL expires <button type="button" class="info-btn" data-tip="When the padlock certificate ends. After that, browsers warn that the connection is not secure." aria-label="About SSL">i</button></th>
-                <th>Domain expires <button type="button" class="info-btn" data-tip="When the domain name registration ends. If it lapses, the site can stop working." aria-label="About Domain">i</button></th>
-                <th>DNS <button type="button" class="info-btn" data-tip="The internet address book for this site (where the website points)." aria-label="About DNS">i</button></th>
-                <th>Last checked <button type="button" class="info-btn" data-tip="The last time WHM scanned this site." aria-label="About Last checked">i</button></th>
+                <th data-sort="name" class="sortable" aria-sort="none">
+                  <button type="button" class="th-sort">Website</button>
+                  <button type="button" class="info-btn" data-tip="The site you are watching. Optional customer name appears under the domain when set." aria-label="About Website">i</button>
+                </th>
+                <th data-sort="urgency" class="sortable sorted-desc" aria-sort="descending">
+                  <button type="button" class="th-sort">Status</button>
+                  <button type="button" class="info-btn" data-tip="Green = Looks good. Amber = Worth a look (e.g. certificate or domain expires in 14–30 days). Red = Needs a fix (under 14 days, expired, or site won’t open). Grey = Couldn’t finish. Default sort puts the worst first." aria-label="About Status">i</button>
+                </th>
+                <th data-sort="website" class="sortable" aria-sort="none">
+                  <button type="button" class="th-sort">Opens</button>
+                  <button type="button" class="info-btn" data-tip="HTTP reachability: WHM requests the page like a browser would and checks for a usable response (HTTP status, redirects, timeouts). “Opens” means it loaded. “Can’t reach” means the host refused or returned a hard error. “Couldn’t check” means a local timeout or network glitch — try again." aria-label="About Opens">i</button>
+                </th>
+                <th data-sort="ssl" class="sortable" aria-sort="none">
+                  <button type="button" class="th-sort">SSL expires</button>
+                  <button type="button" class="info-btn" data-tip="When the HTTPS padlock certificate ends. Amber from 14–30 days left; red under 14 days or expired. After expiry, browsers warn that the connection is not secure." aria-label="About SSL">i</button>
+                </th>
+                <th data-sort="domain" class="sortable" aria-sort="none">
+                  <button type="button" class="th-sort">Domain expires</button>
+                  <button type="button" class="info-btn" data-tip="When the domain name registration ends. Same amber/red windows as SSL. If it lapses, the site can stop working." aria-label="About Domain">i</button>
+                </th>
+                <th data-sort="dns" class="sortable" aria-sort="none">
+                  <button type="button" class="th-sort">DNS</button>
+                  <button type="button" class="info-btn" data-tip="The internet address book for this site (where the website points)." aria-label="About DNS">i</button>
+                </th>
+                <th data-sort="checked" class="sortable" aria-sort="none">
+                  <button type="button" class="th-sort">Last checked</button>
+                  <button type="button" class="info-btn" data-tip="The last time WHM scanned this site." aria-label="About Last checked">i</button>
+                </th>
               </tr>
             </thead>
             <tbody id="site-list"></tbody>
@@ -189,20 +228,22 @@
 
         <h4>What the colours mean</h4>
         <ul class="help-list">
-          <li><strong>Looks good</strong> (green) — fine.</li>
-          <li><strong>Worth a look</strong> (amber) — still works; improve when you can.</li>
-          <li><strong>Needs a fix</strong> (red) — fix soon: site not opening, or certificate/domain expired.</li>
-          <li><strong>Couldn’t finish</strong> (grey) — the check didn’t complete; try again.</li>
+          <li><strong>Looks good</strong> (green) — fine (certificate/domain more than 30 days out).</li>
+          <li><strong>Worth a look</strong> (amber) — still works; renew soon (14–30 days left on certificate or domain).</li>
+          <li><strong>Needs a fix</strong> (red) — under 14 days, expired, or the site won’t open.</li>
+          <li><strong>Couldn’t finish</strong> (grey) — timeout or network glitch; try again.</li>
         </ul>
 
         <h4>Useful buttons</h4>
         <ul class="help-list">
           <li><strong>Excel</strong> / <strong>CSV</strong> — saves one site’s report into Downloads.</li>
           <li><strong>Export all</strong> — one Excel for every website (Overview + Problems).</li>
+          <li><strong>Remove all</strong> — clears every website from the list (asks first).</li>
+          <li>Status chips and <strong>All customers</strong> — quick filters. Click column titles to sort.</li>
           <li><strong>i</strong> on a column — short plain-English explanation.</li>
-          <li><strong>Settings</strong> — wait time, auto checks, alert webhooks. Hover each <strong>i</strong> for a plain-language explanation.</li>
+          <li><strong>Settings</strong> — wait time, auto checks, alert webhooks.</li>
         </ul>
-        <p class="help-note">Use the page controls under the list when you have many websites. Status is about the site opening, certificate, domain, and DNS. Your data stays on this computer.</p>
+        <p class="help-note">The list sorts worst-first by default. Status covers Opens, SSL, domain, and DNS.</p>
       </div>
       <footer>
         <button type="button" class="btn-primary" id="help-ok">Got it</button>

@@ -44,14 +44,14 @@ Paste a site (or import a list), press **Check**, and see whether the website op
 
 ### Recommended install
 
-1. Download **[WebsiteHealthManager-Setup-0.1.0.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.1/WebsiteHealthManager-Setup-0.1.0.exe)** from the [latest release](https://github.com/Pieter1821/Website-Health-Manager/releases/latest).
+1. Download **[WebsiteHealthManager-Setup-0.1.2.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.2/WebsiteHealthManager-Setup-0.1.2.exe)** from the [latest release](https://github.com/Pieter1821/Website-Health-Manager/releases/latest).
 2. Double-click the setup → **Next** → **Install**.
 3. Open **Website Health Manager** from the Start menu or desktop shortcut.
 4. Chrome opens the WHM window.
 5. Type a website (example: `mybusiness.co.za`) → **Check**.
 6. Click a row → **Problems & fixes**. Export with **Excel** / **CSV**, or **Export all** for every site (saved to Downloads).
 
-No Python is required. Your data stays on this PC under `%USERPROFILE%\.whm\`.
+No Python is required. By default your data stays on this PC under `%USERPROFILE%\.whm\`. Optional shared cloud storage (Cloudflare D1) is documented in [`docs/cloudflare-d1.md`](docs/cloudflare-d1.md).
 
 Windows may show SmartScreen for an unsigned build — choose **More info** → **Run anyway**.
 
@@ -129,6 +129,15 @@ Leave the terminal open; stop with `Ctrl+C`. Tk fallback: `python -m whm --tk`.
 
 ```powershell
 pytest -q
+```
+
+### Shared cloud database (optional)
+
+The app stays a **desktop** install. Cloudflare D1 is only private remote storage the desktop app talks to over HTTPS — not a website. See **[`docs/cloudflare-d1.md`](docs/cloudflare-d1.md)**.
+
+```powershell
+python -m whm.migrate_to_cloud --api-url https://whm-api.xxx.workers.dev --token YOUR_TOKEN --yes --save-config
+python -m whm
 ```
 
 ---

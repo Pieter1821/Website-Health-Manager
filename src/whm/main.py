@@ -9,6 +9,15 @@ from pathlib import Path
 
 from whm.application.scheduler import SchedulerService
 from whm.application.services import HealthScanService, SettingsService, WebsiteService
+from whm.infrastructure.cloud_client import CloudApiClient
+from whm.infrastructure.cloud_config import load_cloud_config
+from whm.infrastructure.cloud_repositories import (
+    CloudCustomerRepository,
+    CloudDnsSnapshotRepository,
+    CloudHealthCheckRepository,
+    CloudSettingsRepository,
+    CloudWebsiteRepository,
+)
 from whm.infrastructure.database import connect, default_db_path, initialize_database
 from whm.infrastructure.repositories import (
     SqliteCustomerRepository,
@@ -37,6 +46,32 @@ def setup_logging() -> None:
 
 
 def build_services(db_path: Path | None = None):
+    """
+    Wire repositories + services.
+
+    If ~/.whm/cloud.json (or WHM_API_URL + WHM_API_TOKEN) is set, use Cloudflare D1
+    via the Worker API. Otherwise use local SQLite under ~/.whm/whm.db.
+    """
+    cloud = load_cloud_config()
+    force_local = (os.environ.get("WHM_STORAGE") or "").strip().lower() in {
+        "local",
+        "sqlite",
+    }
+    if cloud and cloud.enabled and not force_local:
+        logging.getLogger(__name__).info(
+            "Using Cloudflare D1 via %s", cloud.api_url
+        )
+        client = CloudApiClient(cloud)
+        customers = CloudCustomerRepository(client)
+        websites = CloudWebsiteRepository(client)
+        health = CloudHealthCheckRepository(client)
+        dns = CloudDnsSnapshotRepository(client)
+        settings = CloudSettingsRepository(client)
+        website_service = WebsiteService(customers, websites)
+        scan_service = HealthScanService(websites, health, dns, settings)
+        settings_service = SettingsService(settings)
+        return website_service, scan_service, settings_service, None
+
     conn = connect(db_path or default_db_path())
     initialize_database(conn)
     customers = SqliteCustomerRepository(conn)

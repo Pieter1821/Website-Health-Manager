@@ -5,7 +5,7 @@
 
 #define MyAppName "Website Health Manager"
 #define MyAppShort "WHM"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.2"
 #define MyAppPublisher "WHM"
 #define MyAppExeName "WebsiteHealthManager.exe"
 

@@ -14,12 +14,16 @@ EXPIRY_THRESHOLDS = (90, 60, 30, 14, 7)
 
 
 def days_to_status(days_remaining: Optional[int]) -> HealthStatus:
-    """Map days-until-expiry to Healthy / Warning / Critical."""
+    """Map days-until-expiry to Healthy / Warning / Critical.
+
+    Amber warning from 14–30 days so renewals surface before near-failure.
+    Critical below 14 days (and already expired).
+    """
     if days_remaining is None:
         return HealthStatus.UNKNOWN
     if days_remaining < 0:
         return HealthStatus.CRITICAL
-    if days_remaining <= 14:
+    if days_remaining < 14:
         return HealthStatus.CRITICAL
     if days_remaining <= 30:
         return HealthStatus.WARNING

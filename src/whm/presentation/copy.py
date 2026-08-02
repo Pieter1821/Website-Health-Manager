@@ -69,6 +69,19 @@ def status_plain(status: HealthStatus) -> str:
     return STATUS_PLAIN.get(status, status.value)
 
 
+def website_plain(status: HealthStatus, *, probe_failed: bool = False) -> str:
+    """Labels for the Web / Opens column (not the same wording as overall Status)."""
+    if probe_failed or status == HealthStatus.UNKNOWN:
+        return "Couldn’t check"
+    if status == HealthStatus.CRITICAL:
+        return "Can’t reach"
+    if status == HealthStatus.WARNING:
+        return "Opens (issues)"
+    if status == HealthStatus.HEALTHY:
+        return "Opens"
+    return status_plain(status)
+
+
 def risk_plain(risk: RiskLevel) -> str:
     return RISK_PLAIN.get(risk, risk.value)
 

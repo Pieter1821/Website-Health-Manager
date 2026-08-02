@@ -121,6 +121,14 @@ class WebsiteService:
     def delete_website(self, website_id: int) -> None:
         self._websites.delete(website_id)
 
+    def delete_all_websites(self) -> int:
+        """Remove every website and its history. Returns how many were deleted."""
+        sites = list(self._websites.list_all())
+        for site in sites:
+            if site.id is not None:
+                self._websites.delete(site.id)
+        return len(sites)
+
     def import_list(self, filename: str, data: bytes) -> ImportResult:
         """Import websites from an Excel (.xlsx) or CSV file."""
         rows = parse_import_file(filename, data)

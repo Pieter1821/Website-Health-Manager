@@ -1,0 +1,15 @@
+name = "whm-api"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+workers_dev = true
+preview_urls = false
+
+# LOCAL ONLY: copy this file to wrangler.toml and paste the real database_id.
+# wrangler.toml is gitignored — never commit real D1 IDs or tokens.
+[[d1_databases]]
+binding = "DB"
+database_name = "whm-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# Set with: npx wrangler secret put WHM_API_TOKEN
+# Do NOT put WHM_API_TOKEN in this file or in [vars].

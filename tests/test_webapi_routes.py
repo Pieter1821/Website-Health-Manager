@@ -110,6 +110,21 @@ def test_delete_site(api_server):
     assert websites.get_website(site.id) is None
 
 
+def test_clear_all_sites(api_server):
+    base, _, websites, *_ = api_server
+    websites.add_website("https://one.example")
+    websites.add_website("https://two.example")
+    status, body = _request(base, "POST", "/api/sites/clear-all", {})
+    assert status == 400
+    status, body = _request(
+        base, "POST", "/api/sites/clear-all", {"confirm": "remove-all"}
+    )
+    assert status == 200
+    assert body["ok"] is True
+    assert body["removed"] == 2
+    assert websites.list_websites() == []
+
+
 def test_settings_get_and_put(api_server):
     base, *_rest, settings = api_server
     status, body = _request(base, "GET", "/api/settings")

@@ -311,7 +311,8 @@ def test_days_to_status_boundaries_no_false_critical():
     assert days_to_status(31) == HealthStatus.HEALTHY
     assert days_to_status(30) == HealthStatus.WARNING
     assert days_to_status(15) == HealthStatus.WARNING
-    assert days_to_status(14) == HealthStatus.CRITICAL
+    assert days_to_status(14) == HealthStatus.WARNING
+    assert days_to_status(13) == HealthStatus.CRITICAL
     assert days_to_status(None) == HealthStatus.UNKNOWN
 
 

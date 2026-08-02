@@ -49,6 +49,18 @@ Thumbs.db
 # Local offline wheel cache
 .wheels/
 
-# Docs: only ship the project README
+# Cursor local project settings
+.cursor/
+
+# Docs: ship project README + docs/; ignore other random markdown
 *.md
 !README.md
+!docs/**/*.md
+!cloudflare/**/*.md
+
+# Cloudflare Worker — keep real D1 IDs / tokens off git
+cloudflare/**/node_modules/
+cloudflare/**/.wrangler/
+cloudflare/**/.dev.vars
+cloudflare/**/wrangler.toml
+!cloudflare/**/wrangler.toml.example

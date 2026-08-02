@@ -1,13 +1,19 @@
 const PAGE_SIZE_KEY = "whm.pageSize";
+const STATUS_RANK = { critical: 0, warning: 1, unknown: 2, healthy: 3 };
 
 const state = {
   sites: [],
+  customers: [],
   selectedId: null,
   detail: null,
   scanning: false,
   view: "list",
   page: 1,
   pageSize: Number(localStorage.getItem(PAGE_SIZE_KEY) || 25) || 25,
+  statusFilter: "all",
+  customerFilter: "",
+  sortKey: "urgency",
+  sortDir: "asc", // urgency: asc = worst first
 };
 
 const el = {
@@ -52,6 +58,9 @@ const el = {
   pagePrev: document.getElementById("page-prev"),
   pageNext: document.getElementById("page-next"),
   pageSize: document.getElementById("page-size"),
+  listSummary: document.getElementById("list-summary"),
+  customerFilter: document.getElementById("customer-filter"),
+  listFilters: document.getElementById("list-filters"),
 };
 
 function bindInfoTips(root = document) {
@@ -290,23 +299,136 @@ function statusCell(label, status, why = "") {
 
 function expiryCell(status, dateLabel, daysLabel, statusLabel) {
   const date = dateLabel && dateLabel !== "—" ? dateLabel : "—";
-  const days = daysLabel
-    ? `<div class="cell-sub">${escapeHtml(daysLabel)}</div>`
-    : "";
   const tone = statusClass(status);
+  const days = daysLabel
+    ? `<div class="cell-sub expiry-days ${tone}">${escapeHtml(daysLabel)}</div>`
+    : "";
   return `<td class="expiry-cell">
     <div class="expiry-date ${tone}">${escapeHtml(date)}</div>
     ${days}
-    <div class="cell-sub">${escapeHtml(statusLabel || "")}</div>
+    <div class="cell-sub"><span class="pill pill-sm ${tone}">${escapeHtml(statusLabel || "")}</span></div>
   </td>`;
+}
+
+function daysNum(value) {
+  if (value === null || value === undefined || value === "") return Number.POSITIVE_INFINITY;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+}
+
+function compareSites(a, b) {
+  const dir = state.sortDir === "desc" ? -1 : 1;
+  const key = state.sortKey;
+  let cmp = 0;
+  if (key === "urgency") {
+    const ra = STATUS_RANK[a.overall] ?? 9;
+    const rb = STATUS_RANK[b.overall] ?? 9;
+    cmp = ra - rb;
+    if (cmp === 0) {
+      cmp = Math.min(daysNum(a.ssl_expires_days_num), daysNum(a.domain_expires_days_num))
+        - Math.min(daysNum(b.ssl_expires_days_num), daysNum(b.domain_expires_days_num));
+    }
+  } else if (key === "name") {
+    cmp = String(a.display_name || "").localeCompare(String(b.display_name || ""), undefined, {
+      sensitivity: "base",
+    });
+  } else if (key === "website") {
+    cmp = (STATUS_RANK[a.website_status] ?? 9) - (STATUS_RANK[b.website_status] ?? 9);
+  } else if (key === "ssl") {
+    cmp = daysNum(a.ssl_expires_days_num) - daysNum(b.ssl_expires_days_num);
+  } else if (key === "domain") {
+    cmp = daysNum(a.domain_expires_days_num) - daysNum(b.domain_expires_days_num);
+  } else if (key === "dns") {
+    cmp = (STATUS_RANK[a.dns_status] ?? 9) - (STATUS_RANK[b.dns_status] ?? 9);
+  } else if (key === "checked") {
+    const ta = a.last_checked_at ? Date.parse(a.last_checked_at) : 0;
+    const tb = b.last_checked_at ? Date.parse(b.last_checked_at) : 0;
+    cmp = ta - tb;
+  }
+  if (cmp === 0) {
+    cmp = String(a.display_name || "").localeCompare(String(b.display_name || ""), undefined, {
+      sensitivity: "base",
+    });
+  }
+  return cmp * dir;
 }
 
 function filteredSites() {
   const q = el.search.value.trim().toLowerCase();
-  if (!q) return state.sites;
-  return state.sites.filter((s) =>
-    `${s.display_name} ${s.domain} ${s.url}`.toLowerCase().includes(q)
-  );
+  let items = state.sites.slice();
+  if (state.statusFilter && state.statusFilter !== "all") {
+    items = items.filter((s) => (s.overall || "unknown") === state.statusFilter);
+  }
+  if (state.customerFilter) {
+    const cid = String(state.customerFilter);
+    items = items.filter((s) => String(s.customer_id || "") === cid);
+  }
+  if (q) {
+    items = items.filter((s) =>
+      `${s.display_name} ${s.domain} ${s.url} ${s.customer_name || ""}`
+        .toLowerCase()
+        .includes(q)
+    );
+  }
+  items.sort(compareSites);
+  return items;
+}
+
+function renderSummary() {
+  if (!el.listSummary) return;
+  const total = state.sites.length;
+  if (!total) {
+    el.listSummary.textContent = "";
+    return;
+  }
+  const counts = { critical: 0, warning: 0, healthy: 0, unknown: 0 };
+  state.sites.forEach((s) => {
+    const key = s.overall || "unknown";
+    if (counts[key] !== undefined) counts[key] += 1;
+    else counts.unknown += 1;
+  });
+  const attention = counts.critical + counts.warning;
+  const parts = [];
+  if (counts.critical) parts.push(`${counts.critical} need${counts.critical === 1 ? "s" : ""} a fix`);
+  if (counts.warning) parts.push(`${counts.warning} worth a look`);
+  if (counts.healthy) parts.push(`${counts.healthy} healthy`);
+  if (counts.unknown) parts.push(`${counts.unknown} unfinished`);
+  const lead =
+    attention > 0
+      ? `${attention} need${attention === 1 ? "s" : ""} attention`
+      : `${counts.healthy} healthy`;
+  el.listSummary.innerHTML = `<strong>${escapeHtml(lead)}</strong><span class="list-summary-rest"> · ${escapeHtml(parts.join(" · "))} · ${total} total</span>`;
+}
+
+function renderCustomerFilter() {
+  if (!el.customerFilter) return;
+  const selected = state.customerFilter;
+  const names = new Map();
+  state.customers.forEach((c) => names.set(String(c.id), c.name));
+  state.sites.forEach((s) => {
+    if (s.customer_id && s.customer_name) names.set(String(s.customer_id), s.customer_name);
+  });
+  const options = ['<option value="">All customers</option>'];
+  [...names.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], undefined, { sensitivity: "base" }))
+    .forEach(([id, name]) => {
+      options.push(
+        `<option value="${escapeHtml(id)}"${id === selected ? " selected" : ""}>${escapeHtml(name)}</option>`
+      );
+    });
+  el.customerFilter.innerHTML = options.join("");
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll("#sites-table thead th.sortable").forEach((th) => {
+    const key = th.dataset.sort;
+    th.classList.remove("sorted-asc", "sorted-desc");
+    th.setAttribute("aria-sort", "none");
+    if (key === state.sortKey) {
+      th.classList.add(state.sortDir === "asc" ? "sorted-asc" : "sorted-desc");
+      th.setAttribute("aria-sort", state.sortDir === "asc" ? "ascending" : "descending");
+    }
+  });
 }
 
 function pageCount(total) {
@@ -374,6 +496,8 @@ function renderPagination(total) {
 }
 
 function renderList() {
+  renderSummary();
+  updateSortHeaders();
   const items = filteredSites();
   clampPage(items.length);
   const start = (state.page - 1) * state.pageSize;
@@ -381,9 +505,16 @@ function renderList() {
 
   el.list.innerHTML = "";
   el.empty.classList.toggle("hidden", items.length > 0);
+  if (!items.length && state.sites.length) {
+    el.empty.innerHTML = "No websites match this filter — try <strong>All</strong> or clear search.";
+  } else if (!state.sites.length) {
+    el.empty.innerHTML =
+      'No websites yet — type one above and press <strong>Check</strong>.';
+  }
   pageItems.forEach((site) => {
     const tr = document.createElement("tr");
-    tr.className = `site-row${site.id === state.selectedId ? " active" : ""}`;
+    const tone = statusClass(site.overall);
+    tr.className = `site-row row-${tone}${site.id === state.selectedId ? " active" : ""}`;
     tr.dataset.id = String(site.id);
     tr.tabIndex = 0;
     tr.setAttribute("role", "button");
@@ -391,10 +522,14 @@ function renderList() {
       "aria-label",
       `${site.display_name}, ${site.overall_label || "Not checked yet"}`
     );
+    const customer = site.customer_name
+      ? `<div class="cell-sub customer-tag">${escapeHtml(site.customer_name)}</div>`
+      : "";
     tr.innerHTML = `
       <td>
         <div class="site-name">${escapeHtml(site.display_name)}</div>
         <div class="cell-sub">${escapeHtml(site.domain)}</div>
+        ${customer}
       </td>
       ${statusCell(site.overall_label, site.overall, site.overall_why)}
       ${statusCell(site.website_label, site.website_status)}
@@ -443,6 +578,8 @@ function escapeHtml(value) {
 async function loadSites() {
   const data = await api("/api/sites");
   state.sites = data.sites || [];
+  state.customers = data.customers || [];
+  renderCustomerFilter();
   renderList();
   if (state.selectedId) {
     const still = state.sites.some((s) => s.id === state.selectedId);
@@ -682,6 +819,73 @@ function bind() {
     state.page = 1;
     renderList();
   });
+  document.querySelectorAll("[data-status-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.statusFilter = btn.getAttribute("data-status-filter") || "all";
+      document.querySelectorAll("[data-status-filter]").forEach((b) => {
+        b.classList.toggle("active", b === btn);
+      });
+      state.page = 1;
+      renderList();
+    });
+  });
+  if (el.customerFilter) {
+    el.customerFilter.addEventListener("change", () => {
+      state.customerFilter = el.customerFilter.value || "";
+      state.page = 1;
+      renderList();
+    });
+  }
+  document.querySelectorAll("#sites-table thead th.sortable").forEach((th) => {
+    const btn = th.querySelector(".th-sort");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      if (!key) return;
+      if (state.sortKey === key) {
+        state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+      } else {
+        state.sortKey = key;
+        // Urgency / expiry: soonest / worst first by default.
+        state.sortDir = key === "name" || key === "checked" ? "asc" : "asc";
+        if (key === "checked") state.sortDir = "desc";
+      }
+      state.page = 1;
+      renderList();
+    });
+  });
+  const removeAllBtn = document.getElementById("remove-all-btn");
+  if (removeAllBtn) {
+    removeAllBtn.addEventListener("click", async () => {
+      if (!state.sites.length) {
+        toast("No websites to remove", { type: "ok" });
+        return;
+      }
+      const ok = await askConfirm({
+        title: "Remove all websites?",
+        message: `Remove all ${state.sites.length} websites from your list?\nPast check history for each will also be removed. This cannot be undone.`,
+        confirmLabel: "Remove all",
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        showLoader("Removing all websites…");
+        const result = await api("/api/sites/clear-all", {
+          method: "POST",
+          body: JSON.stringify({ confirm: "remove-all" }),
+        });
+        state.selectedId = null;
+        state.detail = null;
+        showView("list");
+        await loadSites();
+        toast(`Removed ${result.removed ?? 0} websites`, { type: "ok" });
+      } catch (err) {
+        toast(err.message || "Couldn’t remove websites", { type: "error" });
+      } finally {
+        if (!state.scanning) hideLoader();
+      }
+    });
+  }
   if (el.pagePrev) {
     el.pagePrev.addEventListener("click", () => {
       if (state.page > 1) {

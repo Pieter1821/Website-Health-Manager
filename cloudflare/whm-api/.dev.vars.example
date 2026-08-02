@@ -1,0 +1,2 @@
+# Copy to .dev.vars for local `npm run dev` (never commit .dev.vars)
+WHM_API_TOKEN=replace-with-a-long-random-secret

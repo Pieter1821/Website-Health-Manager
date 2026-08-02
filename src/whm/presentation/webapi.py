@@ -28,6 +28,7 @@ from whm.presentation.copy import (
     overall_why,
     risk_plain,
     status_plain,
+    website_plain,
 )
 from whm.presentation.settings_fields import SETTINGS_FIELDS
 
@@ -66,13 +67,23 @@ def _expiry_bits(iso_date: Any, days_remaining: Any) -> tuple[str, str]:
     return date_label, days_label
 
 
-def serialize_site_row(site: Website, latest: Optional[HealthCheckResult]) -> dict[str, Any]:
+def serialize_site_row(
+    site: Website,
+    latest: Optional[HealthCheckResult],
+    *,
+    customer_name: str = "",
+) -> dict[str, Any]:
+    base = {
+        "id": site.id,
+        "display_name": site.display_name,
+        "domain": site.domain,
+        "url": site.url,
+        "customer_id": site.customer_id,
+        "customer_name": customer_name or "",
+    }
     if latest is None:
         return {
-            "id": site.id,
-            "display_name": site.display_name,
-            "domain": site.domain,
-            "url": site.url,
+            **base,
             "overall": "unknown",
             "overall_label": "Not checked yet",
             "overall_why": "Run Check to see the details",
@@ -82,18 +93,23 @@ def serialize_site_row(site: Website, latest: Optional[HealthCheckResult]) -> di
             "ssl_status": "unknown",
             "ssl_expires": "—",
             "ssl_expires_days": "",
+            "ssl_expires_days_num": None,
             "domain_label": "—",
             "domain_status": "unknown",
             "domain_expires": "—",
             "domain_expires_days": "",
+            "domain_expires_days_num": None,
             "dns_label": "—",
             "dns_status": "unknown",
             "risk_label": "—",
             "last_checked_label": "Never",
+            "last_checked_at": None,
             "response_ms": "—",
+            "check_failed": False,
         }
     ssl_raw = (latest.raw or {}).get("ssl") or {}
     whois_raw = (latest.raw or {}).get("whois") or {}
+    website_raw = (latest.raw or {}).get("website") or {}
     ssl_expires, ssl_days = _expiry_bits(
         ssl_raw.get("not_after"), ssl_raw.get("days_remaining")
     )
@@ -101,33 +117,42 @@ def serialize_site_row(site: Website, latest: Optional[HealthCheckResult]) -> di
         whois_raw.get("expiration_date"), whois_raw.get("days_remaining")
     )
     overall = display_overall(latest)
+    probe_failed = bool(website_raw.get("probe_failed"))
+    check_failed = bool(
+        probe_failed
+        or (latest.error_message or "").strip()
+        or website_raw.get("error")
+    )
     return {
-        "id": site.id,
-        "display_name": site.display_name,
-        "domain": site.domain,
-        "url": site.url,
+        **base,
         "overall": overall.value,
         "overall_label": status_plain(overall),
         "overall_why": overall_why(latest),
-        "website_label": status_plain(latest.website_status),
+        "website_label": website_plain(
+            latest.website_status, probe_failed=probe_failed
+        ),
         "website_status": latest.website_status.value,
         "ssl_label": status_plain(latest.ssl_status),
         "ssl_status": latest.ssl_status.value,
         "ssl_expires": ssl_expires,
         "ssl_expires_days": ssl_days,
+        "ssl_expires_days_num": ssl_raw.get("days_remaining"),
         "domain_label": status_plain(latest.domain_status),
         "domain_status": latest.domain_status.value,
         "domain_expires": domain_expires,
         "domain_expires_days": domain_days,
+        "domain_expires_days_num": whois_raw.get("days_remaining"),
         "dns_label": status_plain(latest.dns_status),
         "dns_status": latest.dns_status.value,
         "risk_label": risk_plain(status_to_risk(overall)),
         "last_checked_label": latest.checked_at.strftime("%Y-%m-%d %H:%M"),
+        "last_checked_at": latest.checked_at.isoformat(),
         "response_ms": (
             f"{latest.response_time_ms:.0f}"
             if latest.response_time_ms is not None
             else "—"
         ),
+        "check_failed": check_failed,
     }
 
 
@@ -338,11 +363,31 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path == "/api/sites":
+                customers = {
+                    c.id: c.name
+                    for c in ctx.websites.list_customers()
+                    if c.id is not None
+                }
                 rows = [
-                    serialize_site_row(site, ctx.scans.latest(site.id) if site.id else None)
+                    serialize_site_row(
+                        site,
+                        ctx.scans.latest(site.id) if site.id else None,
+                        customer_name=customers.get(site.customer_id or -1, ""),
+                    )
                     for site in ctx.websites.list_websites()
                 ]
-                self._send(*_json_bytes({"sites": rows}))
+                self._send(
+                    *_json_bytes(
+                        {
+                            "sites": rows,
+                            "customers": [
+                                {"id": c.id, "name": c.name}
+                                for c in ctx.websites.list_customers()
+                                if c.id is not None
+                            ],
+                        }
+                    )
+                )
                 return
 
             if path.startswith("/api/sites/") and path.count("/") == 3:
@@ -427,6 +472,21 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                     )
                     return
                 self._send(*_json_bytes({"id": site.id, "domain": site.domain}))
+                return
+
+            if path == "/api/sites/clear-all":
+                if str(payload.get("confirm", "")).strip() != "remove-all":
+                    self._send(
+                        *_json_bytes(
+                            {
+                                "error": 'Send {"confirm":"remove-all"} to remove every website'
+                            },
+                            400,
+                        )
+                    )
+                    return
+                removed = ctx.websites.delete_all_websites()
+                self._send(*_json_bytes({"ok": True, "removed": removed}))
                 return
 
             if path == "/api/export-all":
