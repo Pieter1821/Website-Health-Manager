@@ -8,11 +8,13 @@ import mimetypes
 import sqlite3
 import threading
 import uuid
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
+from whm import __version__ as APP_VERSION
 from whm.application.services import HealthScanService, SettingsService, WebsiteService
 from whm.domain.models import FindingStatus, HealthCheckResult, Website
 from whm.domain.status import display_overall, status_to_risk
@@ -20,6 +22,7 @@ from whm.infrastructure.reports import (
     save_portfolio_report_to_downloads,
     save_report_to_downloads,
 )
+from whm.infrastructure.updates import check_for_update, update_info_dict
 from whm.presentation.copy import (
     category_plain,
     category_tip,
@@ -432,6 +435,22 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 self._send(*_json_bytes({"fields": fields}))
                 return
 
+            if path == "/api/version":
+                self._send(
+                    *_json_bytes(
+                        {
+                            "version": APP_VERSION,
+                            "app": "Website Health Manager",
+                        }
+                    )
+                )
+                return
+
+            if path == "/api/updates/check":
+                info = check_for_update()
+                self._send(*_json_bytes(update_info_dict(info)))
+                return
+
             self._send(*_json_bytes({"error": "Not found"}, 404))
 
         def do_POST(self) -> None:  # noqa: N802
@@ -487,6 +506,28 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                     return
                 removed = ctx.websites.delete_all_websites()
                 self._send(*_json_bytes({"ok": True, "removed": removed}))
+                return
+
+            if path == "/api/updates/open":
+                url = str(payload.get("url", "")).strip()
+                if not url.startswith("https://"):
+                    self._send(
+                        *_json_bytes({"error": "Only https download links are allowed"}, 400)
+                    )
+                    return
+                allowed_hosts = (
+                    "github.com",
+                    "objects.githubusercontent.com",
+                    "release-assets.githubusercontent.com",
+                )
+                host = (urlparse(url).hostname or "").lower()
+                if host not in allowed_hosts and not host.endswith(".githubusercontent.com"):
+                    self._send(
+                        *_json_bytes({"error": "Download host is not allowed"}, 400)
+                    )
+                    return
+                webbrowser.open(url)
+                self._send(*_json_bytes({"ok": True}))
                 return
 
             if path == "/api/export-all":

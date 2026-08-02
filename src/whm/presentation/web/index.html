@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=page1" />
+  <link rel="stylesheet" href="/static/styles.css?v=page2" />
 </head>
 <body>
   <a class="skip-link" href="#workspace">Skip to websites</a>
@@ -53,6 +53,7 @@
       </form>
 
       <div class="top-links">
+        <button type="button" class="linkish" id="update-btn" title="Check GitHub for a newer installer">Updates</button>
         <button type="button" class="linkish" id="help-btn">Help</button>
         <button type="button" class="linkish" id="settings-btn">Settings</button>
       </div>
@@ -74,7 +75,6 @@
             <button type="button" class="btn-primary" id="check-all-btn">Check all</button>
             <button type="button" class="btn-ghost" id="export-all-excel-btn" title="Save an Excel report for every website into Downloads">Export all</button>
             <button type="button" class="btn-ghost" id="refresh-btn">Refresh</button>
-            <button type="button" class="btn-danger" id="remove-all-btn" title="Remove every website from this list">Remove all</button>
           </div>
         </header>
 
@@ -86,12 +86,15 @@
             <button type="button" class="filter-chip" data-status-filter="healthy">Looks good</button>
             <button type="button" class="filter-chip" data-status-filter="unknown">Couldn’t finish</button>
           </div>
-          <label class="customer-filter">
-            <span class="sr-only">Filter by customer</span>
-            <select id="customer-filter" aria-label="Filter by customer">
-              <option value="">All customers</option>
-            </select>
-          </label>
+          <div class="list-filters-right">
+            <label class="customer-filter">
+              <span class="sr-only">Filter by customer</span>
+              <select id="customer-filter" aria-label="Filter by customer">
+                <option value="">All customers</option>
+              </select>
+            </label>
+            <button type="button" class="btn-danger btn-remove-all" id="remove-all-btn" title="Remove every website from this list">Remove all</button>
+          </div>
         </div>
 
         <div class="table-wrap sites-wrap fullscreen-panel" id="sites-wrap">
@@ -242,6 +245,7 @@
           <li>Status chips and <strong>All customers</strong> — quick filters. Click column titles to sort.</li>
           <li><strong>i</strong> on a column — short plain-English explanation.</li>
           <li><strong>Settings</strong> — wait time, auto checks, alert webhooks.</li>
+          <li><strong>Updates</strong> — checks GitHub for a newer installer (also runs quietly when the app opens).</li>
         </ul>
         <p class="help-note">The list sorts worst-first by default. Status covers Opens, SSL, domain, and DNS.</p>
       </div>
@@ -283,6 +287,6 @@
   </div>
   <div class="tip-bubble hidden" id="tip-bubble" role="tooltip"></div>
   <div id="pill-row" class="hidden" aria-hidden="true"></div>
-  <script src="/static/app.js?v=page1"></script>
+  <script src="/static/app.js?v=page2"></script>
 </body>
 </html>

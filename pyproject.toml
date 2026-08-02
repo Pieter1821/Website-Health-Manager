@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "website-health-manager"
-version = "0.1.2"
+version = "0.1.3"
 description = "Desktop app to monitor websites, domains, SSL, DNS, and email authentication"
 readme = "README.md"
 license = { text = "MIT" }

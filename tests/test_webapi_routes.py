@@ -125,7 +125,25 @@ def test_clear_all_sites(api_server):
     assert websites.list_websites() == []
 
 
+def test_version_endpoint(api_server):
+    base, *_ = api_server
+    status, body = _request(base, "GET", "/api/version")
+    assert status == 200
+    assert body["version"]
+    assert "Health" in body["app"]
+
+
+def test_updates_open_rejects_bad_host(api_server):
+    base, *_ = api_server
+    status, body = _request(
+        base, "POST", "/api/updates/open", {"url": "https://evil.example/setup.exe"}
+    )
+    assert status == 400
+    assert "allowed" in body["error"].lower()
+
+
 def test_settings_get_and_put(api_server):
+
     base, *_rest, settings = api_server
     status, body = _request(base, "GET", "/api/settings")
     assert status == 200

@@ -44,7 +44,7 @@ Paste a site (or import a list), press **Check**, and see whether the website op
 
 ### Recommended install
 
-1. Download **[WebsiteHealthManager-Setup-0.1.2.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.2/WebsiteHealthManager-Setup-0.1.2.exe)** from the [latest release](https://github.com/Pieter1821/Website-Health-Manager/releases/latest).
+1. Download **[WebsiteHealthManager-Setup-0.1.3.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.3/WebsiteHealthManager-Setup-0.1.3.exe)** from the [latest release](https://github.com/Pieter1821/Website-Health-Manager/releases/latest).
 2. Double-click the setup → **Next** → **Install**.
 3. Open **Website Health Manager** from the Start menu or desktop shortcut.
 4. Chrome opens the WHM window.
@@ -124,6 +124,8 @@ python -m whm
 ```
 
 Leave the terminal open; stop with `Ctrl+C`. Tk fallback: `python -m whm --tk`.
+
+The app can check GitHub Releases for a newer installer (**Updates** in the top bar, and a quiet check shortly after launch).
 
 ### Tests
 
