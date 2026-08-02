@@ -44,7 +44,7 @@ Paste a site (or import a list), press **Check**, and see whether the website op
 
 ### Recommended install
 
-1. Download **[WebsiteHealthManager-Setup-0.1.0.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.0/WebsiteHealthManager-Setup-0.1.0.exe)** from the [v0.1.0 release](https://github.com/Pieter1821/Website-Health-Manager/releases/tag/v0.1.0).
+1. Download **[WebsiteHealthManager-Setup-0.1.0.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.1/WebsiteHealthManager-Setup-0.1.0.exe)** from the [latest release](https://github.com/Pieter1821/Website-Health-Manager/releases/latest).
 2. Double-click the setup → **Next** → **Install**.
 3. Open **Website Health Manager** from the Start menu or desktop shortcut.
 4. Chrome opens the WHM window.
@@ -114,7 +114,7 @@ pip install -e ".[dev]" pyinstaller
 | Output | Use |
 |--------|-----|
 | `dist\WebsiteHealthManager.exe` | Portable — copy and double-click |
-| `dist\WebsiteHealthManager-Setup-0.1.0.exe` | Installer — Start menu + desktop shortcut |
+| `dist\WebsiteHealthManager-Setup-*.exe` | Installer — Start menu + desktop shortcut |
 
 ### Run from source (developers)
 
