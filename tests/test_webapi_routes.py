@@ -133,6 +133,15 @@ def test_version_endpoint(api_server):
     assert "Health" in body["app"]
 
 
+def test_updates_open_rejects_bad_host(api_server):
+    base, *_ = api_server
+    status, body = _request(
+        base, "POST", "/api/updates/open", {"url": "https://evil.example/setup.exe"}
+    )
+    assert status == 400
+    assert "allowed" in body["error"].lower()
+
+
 def test_settings_get_and_put(api_server):
 
     base, *_rest, settings = api_server

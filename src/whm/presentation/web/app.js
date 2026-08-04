@@ -917,6 +917,74 @@ function bindTabs() {
   });
 }
 
+async function openUpdateDownload(url) {
+  if (!url) return;
+  try {
+    await api("/api/updates/open", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+  } catch (err) {
+    // Fallback: try the browser directly.
+    try {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (_) {
+      toast(err.message || "Couldn’t open the download", { type: "error" });
+    }
+  }
+}
+
+async function offerUpdate(info, { quiet = false } = {}) {
+  if (!info || !info.update_available) {
+    if (!quiet) {
+      const ver = info?.current_version || "";
+      toast(
+        info?.error
+          ? `Couldn’t check for updates (${info.error})`
+          : `You’re on the latest version${ver ? ` (${ver})` : ""}`,
+        { type: info?.error ? "warn" : "ok", duration: 4200 }
+      );
+    }
+    return;
+  }
+  const latest = info.latest_version || "newer";
+  const current = info.current_version || "this build";
+  const ok = await askConfirm({
+    title: "Update available",
+    message: `Version ${latest} is available (you have ${current}).\n\nOpen the Windows setup download?`,
+    confirmLabel: "Download update",
+    cancelLabel: quiet ? "Later" : "Not now",
+    danger: false,
+  });
+  if (ok) {
+    await openUpdateDownload(info.download_url || info.release_url);
+    toast("Download opened — install when it finishes, then restart WHM", {
+      type: "ok",
+      duration: 5200,
+    });
+  }
+}
+
+async function checkForUpdates({ quiet = false } = {}) {
+  try {
+    if (!quiet) {
+      setStatus("Checking for updates…");
+      showLoader("Checking GitHub for updates…");
+    }
+    const info = await api("/api/updates/check");
+    await offerUpdate(info, { quiet });
+  } catch (err) {
+    if (!quiet) {
+      toast(err.message || "Couldn’t check for updates", { type: "error" });
+    }
+  } finally {
+    if (!quiet && !state.scanning) {
+      hideLoader();
+      setStatus("");
+    }
+  }
+}
+
 async function showImportResult(result) {
   const added = result.added_count ?? (result.added || []).length;
   const summary = result.summary || "Import finished";
@@ -1127,6 +1195,10 @@ function bind() {
   });
   document.getElementById("help-close").addEventListener("click", closeHelp);
   document.getElementById("help-ok").addEventListener("click", closeHelp);
+  const updateBtn = document.getElementById("update-btn");
+  if (updateBtn) {
+    updateBtn.addEventListener("click", () => checkForUpdates({ quiet: false }));
+  }
   document.getElementById("back-btn").addEventListener("click", backToList);
   document.getElementById("settings-btn").addEventListener("click", openSettings);
   document.getElementById("settings-close").addEventListener("click", () => closeModal(el.settingsModal));
@@ -1319,6 +1391,7 @@ refreshAuthStatus()
     await loadSites();
     setStatus("");
     hideLoader();
+    setTimeout(() => checkForUpdates({ quiet: true }), 1500);
   })
   .catch((err) => {
     setStatus("Couldn’t start");
