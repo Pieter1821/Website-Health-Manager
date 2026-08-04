@@ -92,34 +92,21 @@ class CloudApiClient:
     def delete(self, path: str) -> Any:
         return self.request("DELETE", path)
 
-    def login(self, username: str, password: str) -> dict[str, Any]:
+    def login(self, email: str, password: str) -> dict[str, Any]:
+        identity = (email or "").strip()
         return self.post(
             "/api/auth/login",
-            {"username": username, "password": password},
+            {"email": identity, "username": identity, "password": password},
             auth=False,
         )
 
-    def login_totp(self, temp_token: str, code: str) -> dict[str, Any]:
-        return self.post(
-            "/api/auth/login/totp",
-            {"temp_token": temp_token, "code": code},
-            auth=False,
-        )
-
-    def enroll_mfa(self, temp_token: str, code: str) -> dict[str, Any]:
-        return self.post(
-            "/api/auth/mfa/enroll",
-            {"temp_token": temp_token, "code": code},
-            auth=False,
-        )
-
-    def bootstrap_admin(self, bootstrap_token: str, username: str, password: str) -> dict[str, Any]:
+    def bootstrap_admin(self, bootstrap_token: str, email: str, password: str) -> dict[str, Any]:
         previous = self._token
         self._token = bootstrap_token
         try:
             return self.post(
                 "/api/auth/bootstrap",
-                {"username": username, "password": password},
+                {"email": email, "username": email, "password": password},
             )
         finally:
             self._token = previous
@@ -130,10 +117,11 @@ class CloudApiClient:
     def list_users(self) -> dict[str, Any]:
         return self.get("/api/users")
 
-    def create_user(self, username: str, password: str, role: str) -> dict[str, Any]:
+    def create_user(self, email: str, password: str, role: str) -> dict[str, Any]:
+        identity = (email or "").strip()
         return self.post(
             "/api/users",
-            {"username": username, "password": password, "role": role},
+            {"email": identity, "username": identity, "password": password, "role": role},
         )
 
     def patch_user(self, user_id: int, body: dict[str, Any]) -> dict[str, Any]:
@@ -141,6 +129,3 @@ class CloudApiClient:
 
     def delete_user(self, user_id: int) -> dict[str, Any]:
         return self.delete(f"/api/users/{user_id}")
-
-    def reset_mfa(self, user_id: int) -> dict[str, Any]:
-        return self.post(f"/api/users/{user_id}/reset-mfa", {})

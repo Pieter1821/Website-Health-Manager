@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=login2" />
+  <link rel="stylesheet" href="/static/styles.css?v=auth1" />
 </head>
 <body>
   <a class="skip-link" href="#workspace">Skip to websites</a>
@@ -56,7 +56,6 @@
         <span class="session-chip hidden" id="session-chip" aria-live="polite"></span>
         <button type="button" class="linkish hidden" id="users-btn" title="Manage cloud users">Users</button>
         <button type="button" class="linkish" id="signout-btn" title="Sign out of cloud">Sign out</button>
-        <button type="button" class="linkish" id="update-btn" title="Check GitHub for a newer installer">Updates</button>
         <button type="button" class="linkish" id="help-btn">Help</button>
         <button type="button" class="linkish" id="settings-btn">Settings</button>
       </div>
@@ -75,22 +74,22 @@
           <p class="login-product">Website Health Manager</p>
           <h2 id="login-title">Sign in to continue</h2>
           <p class="login-subtitle" id="login-subtitle">
-            Use your WHM username and password. We’ll ask for an authenticator code next.
+            Enter your email (or username) and password to open the shared cloud list.
           </p>
         </div>
         <form id="login-form" class="login-form">
           <div class="login-step" data-step="password">
-            <label for="login-username">Username</label>
+            <label for="login-email">Email or username</label>
             <input
-              id="login-username"
-              name="username"
+              id="login-email"
+              name="email"
+              type="text"
+              inputmode="email"
               autocomplete="username"
               autocapitalize="off"
               spellcheck="false"
-              maxlength="64"
-              pattern="[A-Za-z0-9._-]{2,64}"
-              title="Letters, numbers, dots, underscores, or hyphens"
-              placeholder="e.g. admin"
+              maxlength="120"
+              placeholder="you@company.com or admin"
               required
             />
             <label for="login-password">Password</label>
@@ -103,43 +102,7 @@
               placeholder="Your password"
               required
             />
-            <button type="submit" class="btn-primary" id="login-next-btn">Continue</button>
-            <p class="login-hint">Step 1 of 2 — password, then authenticator code</p>
-          </div>
-          <div class="login-step hidden" data-step="mfa">
-            <p class="login-step-lead">Open your authenticator app and enter the 6-digit code.</p>
-            <label for="login-totp">Authenticator code</label>
-            <input
-              id="login-totp"
-              name="totp"
-              class="login-code"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength="8"
-              pattern="[0-9 ]{6,8}"
-              placeholder="123 456"
-            />
-            <button type="button" class="btn-primary" id="login-totp-btn">Sign in</button>
-            <p class="login-hint">Codes refresh every 30 seconds</p>
-          </div>
-          <div class="login-step hidden" data-step="enroll">
-            <p class="login-step-lead">
-              First-time setup: scan this QR with Google Authenticator, Authy, or similar — then enter the code it shows.
-            </p>
-            <img id="login-qr" class="login-qr" alt="Authenticator QR code" />
-            <p class="login-manual-label">Or enter this key manually</p>
-            <p class="mono small" id="login-secret"></p>
-            <label for="login-enroll-totp">Confirm code from the app</label>
-            <input
-              id="login-enroll-totp"
-              class="login-code"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength="8"
-              pattern="[0-9 ]{6,8}"
-              placeholder="123 456"
-            />
-            <button type="button" class="btn-primary" id="login-enroll-btn">Enable and sign in</button>
+            <button type="submit" class="btn-primary" id="login-next-btn">Sign in</button>
           </div>
           <p class="error-text hidden" id="login-error" role="alert"></p>
         </form>
@@ -332,7 +295,6 @@
           <li>Status chips and <strong>All customers</strong> — quick filters. Click column titles to sort.</li>
           <li><strong>i</strong> on a column — short plain-English explanation.</li>
           <li><strong>Settings</strong> — wait time, auto checks, alert webhooks.</li>
-          <li><strong>Updates</strong> — checks GitHub for a newer installer (also runs quietly when the app opens).</li>
         </ul>
         <p class="help-note">The list sorts worst-first by default. Status covers Opens, SSL, domain, and DNS.</p>
       </div>
@@ -376,9 +338,8 @@
         <table class="data-table users-table">
           <thead>
             <tr>
-              <th>Username</th>
+              <th>Email</th>
               <th>Role</th>
-              <th>MFA</th>
               <th></th>
             </tr>
           </thead>
@@ -386,8 +347,8 @@
         </table>
         <form id="users-create-form" class="users-create">
           <h4>Add user</h4>
-          <label for="new-username">Username</label>
-          <input id="new-username" required autocomplete="off" />
+          <label for="new-username">Email</label>
+          <input id="new-username" type="email" required autocomplete="off" placeholder="colleague@company.com" />
           <label for="new-password">Password (min 10)</label>
           <input id="new-password" type="password" required minlength="10" autocomplete="new-password" />
           <label for="new-role">Role</label>
@@ -410,6 +371,6 @@
   </div>
   <div class="tip-bubble hidden" id="tip-bubble" role="tooltip"></div>
   <div id="pill-row" class="hidden" aria-hidden="true"></div>
-  <script src="/static/app.js?v=login3"></script>
+  <script src="/static/app.js?v=auth1"></script>
 </body>
 </html>

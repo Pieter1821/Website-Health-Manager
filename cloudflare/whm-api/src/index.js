@@ -2,36 +2,31 @@
  * Private backend for the Website Health Manager *desktop* app (not a website).
  *
  * Access control:
- * - Requires X-WHM-Client: desktop
- * - Auth routes: login / bootstrap / MFA (no session yet)
- * - Data routes: Bearer JWT session OR legacy WHM_API_TOKEN (admin bootstrap)
- * - Roles: admin | operator | viewer
+ * - Requires X-WHM-Client: desktop (blank 404 otherwise)
+ * - Data routes: valid session JWT (email/password login) or bootstrap WHM_API_TOKEN
+ *   (migrate / admin scripts only — desktop rejects bootstrap tokens in cloud.json)
  * - Missing/wrong credentials → blank 404
  * - Authenticated but forbidden → 403 JSON
  */
 
 import {
   SECRET_SETTING_KEYS,
+  SESSION_TTL_SECONDS,
   clearRateLimit,
   ensureUsersTable,
-  forbidden,
   escapeLike,
-  generateTotpSecret,
+  forbidden,
   hashPassword,
-  issueMfaTempJwt,
   issueSessionJwt,
   json,
-  normalizeUsername,
+  normalizeLoginId,
   notFound,
-  otpauthUri,
   publicUser,
   rateLimited,
   resolveAuth,
   roleAllowed,
   unauthorized,
-  verifyJwt,
   verifyPassword,
-  verifyTotp,
 } from "./auth.js";
 
 export default {
@@ -74,12 +69,7 @@ function methodPath(method, path) {
 }
 
 function isPublicAuthPath(key) {
-  return (
-    key === "POST /api/auth/bootstrap" ||
-    key === "POST /api/auth/login" ||
-    key === "POST /api/auth/login/totp" ||
-    key === "POST /api/auth/mfa/enroll"
-  );
+  return key === "POST /api/auth/bootstrap" || key === "POST /api/auth/login";
 }
 
 function isDesktopClient(request) {
@@ -138,13 +128,10 @@ async function routeAuth(request, env, path) {
         return json({ error: "Already bootstrapped" }, 409);
       }
       const body = await readJson(request);
-      const username = normalizeUsername(body?.username);
+      const username = normalizeLoginId(body?.email || body?.username);
       const password = String(body?.password || "");
       if (!username) {
-        return json(
-          { error: "Username must be 2–64 characters: letters, numbers, . _ -" },
-          400
-        );
+        return json({ error: "Enter a valid email address" }, 400);
       }
       if (password.length < 10 || password.length > 200) {
         return json({ error: "password must be 10–200 characters" }, 400);
@@ -167,8 +154,8 @@ async function routeAuth(request, env, path) {
           user: {
             id: newId,
             username,
+            email: username,
             role: "admin",
-            totp_enabled: false,
           },
         },
         201
@@ -185,119 +172,29 @@ async function routeAuth(request, env, path) {
 
   if (method === "POST" && path === "/api/auth/login") {
     const body = await readJson(request);
-    const username = normalizeUsername(body?.username);
+    const username = normalizeLoginId(body?.email || body?.username);
     const password = String(body?.password || "");
     if (!username || password.length < 1 || password.length > 200) {
-      return unauthorized("Invalid username or password");
+      return unauthorized("Invalid email or password");
     }
     const rlKey = `login:${clientIp(request)}:${username}`;
     if (rateLimited(rlKey)) {
       return json({ error: "Too many attempts — try again later" }, 429);
     }
-    // Parameterized query — username is never concatenated into SQL.
     const user = await db
       .prepare("SELECT * FROM users WHERE username = ? COLLATE NOCASE")
       .bind(username)
       .first();
     if (!user || user.disabled || !(await verifyPassword(password, user.password_hash))) {
-      return unauthorized("Invalid username or password");
+      return unauthorized("Invalid email or password");
     }
     clearRateLimit(rlKey);
-
-    if (!user.totp_enabled || !user.totp_secret) {
-      const secret = generateTotpSecret();
-      const now = new Date().toISOString();
-      await db
-        .prepare(
-          `UPDATE users SET totp_secret = ?, totp_enabled = 0, totp_last_step = NULL, updated_at = ?
-           WHERE id = ?`
-        )
-        .bind(secret, now, user.id)
-        .run();
-      const temp_token = await issueMfaTempJwt(user, jwtSecret, "mfa_enroll");
-      return json({
-        status: "mfa_enrollment_required",
-        temp_token,
-        totp_secret: secret,
-        otpauth_uri: otpauthUri(user.username, secret),
-        user: publicUser({ ...user, totp_enabled: 0 }),
-      });
-    }
-
-    const temp_token = await issueMfaTempJwt(user, jwtSecret, "mfa_login");
-    return json({
-      status: "mfa_required",
-      temp_token,
-      user: publicUser(user),
-    });
-  }
-
-  if (method === "POST" && path === "/api/auth/login/totp") {
-    const body = await readJson(request);
-    const temp = String(body?.temp_token || "");
-    const code = String(body?.code || "");
-    const payload = await verifyJwt(temp, jwtSecret);
-    if (!payload || payload.typ !== "mfa_login") {
-      return unauthorized("MFA session expired — sign in again");
-    }
-    const rlKey = `totp:${clientIp(request)}:${payload.username}`;
-    if (rateLimited(rlKey)) {
-      return json({ error: "Too many attempts — try again later" }, 429);
-    }
-    const user = await db.prepare("SELECT * FROM users WHERE id = ?").bind(payload.sub).first();
-    if (!user || user.disabled || !user.totp_enabled || !user.totp_secret) {
-      return unauthorized("Invalid MFA session");
-    }
-    const result = await verifyTotp(user.totp_secret, code, {
-      lastStep: user.totp_last_step,
-    });
-    if (!result.ok) {
-      return unauthorized("Invalid authenticator code");
-    }
-    clearRateLimit(rlKey);
-    const now = new Date().toISOString();
-    await db
-      .prepare("UPDATE users SET totp_last_step = ?, updated_at = ? WHERE id = ?")
-      .bind(result.step, now, user.id)
-      .run();
     const token = await issueSessionJwt(user, jwtSecret);
     return json({
       status: "ok",
       token,
-      expires_in: 12 * 60 * 60,
+      expires_in: SESSION_TTL_SECONDS,
       user: publicUser(user),
-    });
-  }
-
-  if (method === "POST" && path === "/api/auth/mfa/enroll") {
-    const body = await readJson(request);
-    const temp = String(body?.temp_token || "");
-    const code = String(body?.code || "");
-    const payload = await verifyJwt(temp, jwtSecret);
-    if (!payload || payload.typ !== "mfa_enroll") {
-      return unauthorized("Enrollment session expired — sign in again");
-    }
-    const user = await db.prepare("SELECT * FROM users WHERE id = ?").bind(payload.sub).first();
-    if (!user || user.disabled || !user.totp_secret) {
-      return unauthorized("Invalid enrollment session");
-    }
-    const result = await verifyTotp(user.totp_secret, code, { lastStep: null });
-    if (!result.ok) {
-      return unauthorized("Invalid authenticator code");
-    }
-    const now = new Date().toISOString();
-    await db
-      .prepare(
-        `UPDATE users SET totp_enabled = 1, totp_last_step = ?, updated_at = ? WHERE id = ?`
-      )
-      .bind(result.step, now, user.id)
-      .run();
-    const token = await issueSessionJwt(user, jwtSecret);
-    return json({
-      status: "ok",
-      token,
-      expires_in: 12 * 60 * 60,
-      user: publicUser({ ...user, totp_enabled: 1 }),
     });
   }
 
@@ -314,7 +211,13 @@ async function route(request, env, url, path, auth) {
 
   if (method === "GET" && path === "/api/auth/me") {
     if (auth.type === "bootstrap") {
-      return json({ user: { username: "bootstrap", role: "admin", totp_enabled: false } });
+      return json({
+        user: {
+          username: "bootstrap",
+          email: "bootstrap",
+          role: "admin",
+        },
+      });
     }
     const user = await db.prepare("SELECT * FROM users WHERE id = ?").bind(auth.userId).first();
     if (!user || user.disabled) return unauthorized("Session invalid");
@@ -335,14 +238,11 @@ async function route(request, env, url, path, auth) {
     const denied = requireRole(auth, ["admin"]);
     if (denied) return denied;
     const body = await readJson(request);
-    const username = normalizeUsername(body?.username);
+    const username = normalizeLoginId(body?.email || body?.username);
     const password = String(body?.password || "");
     const role = String(body?.role || "operator");
     if (!username) {
-      return json(
-        { error: "Username must be 2–64 characters: letters, numbers, . _ -" },
-        400
-      );
+      return json({ error: "Enter a valid email address" }, 400);
     }
     if (password.length < 10 || password.length > 200) {
       return json({ error: "password must be 10–200 characters" }, 400);
@@ -363,7 +263,7 @@ async function route(request, env, url, path, auth) {
       const row = await db.prepare("SELECT * FROM users WHERE id = ?").bind(r.meta.last_row_id).first();
       return json({ user: publicUser(row) }, 201);
     } catch {
-      return json({ error: "Username already exists" }, 409);
+      return json({ error: "Email already exists" }, 409);
     }
   }
 

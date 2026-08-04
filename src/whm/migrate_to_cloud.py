@@ -4,7 +4,8 @@ Usage:
   python -m whm.migrate_to_cloud
   python -m whm.migrate_to_cloud --api-url https://whm-api.xxx.workers.dev --token SECRET
 
-Requires WHM_API_URL + WHM_API_TOKEN (env or ~/.whm/cloud.json), or CLI flags.
+Requires WHM_API_URL + WHM_API_TOKEN (env or CLI flags). The bootstrap token is for
+migrate / one-time admin creation only — do not put it in desktop cloud.json.
 This REPLACES all cloud data. Local SQLite is left untouched.
 """
 
@@ -61,16 +62,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Local SQLite path (default: ~/.whm/whm.db)",
     )
     parser.add_argument("--api-url", default="", help="Worker base URL")
-    parser.add_argument("--token", default="", help="WHM_API_TOKEN bearer secret")
+    parser.add_argument("--token", default="", help="WHM_API_TOKEN bearer secret (bootstrap)")
     parser.add_argument(
         "--save-config",
         action="store_true",
-        help="Write api-url (and bootstrap token for scripts) to ~/.whm/cloud.json",
+        help="Write api_url only to ~/.whm/cloud.json (desktop then signs in with email/password)",
     )
     parser.add_argument(
         "--bootstrap-user",
         default="",
-        help="Create the first admin user after migrate (requires empty users table)",
+        help="Create the first admin user after migrate (email or legacy username)",
     )
     parser.add_argument(
         "--bootstrap-password",
@@ -94,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Local database not found: {db_path}", file=sys.stderr)
         return 1
 
-    config = load_cloud_config()
+    config = load_cloud_config(allow_bootstrap_token=True)
     api_url = (args.api_url or (config.api_url if config else "")).strip().rstrip("/")
     token = (args.token or (config.api_token if config else "")).strip()
     if not api_url or not token:
@@ -150,21 +151,23 @@ def main(argv: list[str] | None = None) -> int:
                 boot = client.bootstrap_admin(token, args.bootstrap_user, password)
                 print("Bootstrap OK:", json.dumps(boot, indent=2))
                 print(
-                    "Sign in from the desktop app with that username/password, "
-                    "then enroll authenticator MFA."
+                    "Sign in on each desktop with that email/username and password "
+                    "(do not put WHM_API_TOKEN in cloud.json)."
                 )
             except CloudApiError as exc:
                 print(f"Bootstrap failed: {exc}", file=sys.stderr)
 
     if args.save_config:
-        # Save URL for the desktop app; keep bootstrap token for scripts only.
-        path = save_cloud_config(api_url, token)
+        path = save_cloud_config(api_url)
         print(f"Saved cloud config to {path}")
-        print("Desktop users should sign in with username/password + MFA (not the bootstrap token).")
+        print(
+            "Desktop cloud.json has api_url only. Open the app and sign in with "
+            "email/password (or legacy username like admin)."
+        )
     else:
         print(
-            "Tip: --save-config writes ~/.whm/cloud.json; then open the app and sign in. "
-            "Set WHM_JWT_SECRET on the Worker before first login."
+            "Tip: --save-config writes ~/.whm/cloud.json with api_url only; "
+            "desktop users sign in after that."
         )
     return 0
 

@@ -8,7 +8,6 @@ import mimetypes
 import sqlite3
 import threading
 import uuid
-import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
@@ -23,6 +22,7 @@ from whm.domain.status import display_overall, status_to_risk
 from whm.infrastructure.cloud_client import CloudApiClient, CloudApiError
 from whm.infrastructure.cloud_config import (
     clear_cloud_session,
+    is_session_jwt,
     load_cloud_config,
     save_cloud_config,
 )
@@ -30,7 +30,6 @@ from whm.infrastructure.reports import (
     save_portfolio_report_to_downloads,
     save_report_to_downloads,
 )
-from whm.infrastructure.updates import check_for_update, update_info_dict
 from whm.presentation.copy import (
     category_plain,
     category_tip,
@@ -50,19 +49,6 @@ WEB_ROOT = Path(__file__).resolve().parent / "web"
 
 def _json_bytes(payload: Any, status: int = 200) -> tuple[int, bytes, str]:
     return status, json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8"
-
-
-def _otpauth_qr_png_b64(otpauth_uri: str) -> str:
-    """PNG QR as base64 for authenticator enrollment (PyOTP-compatible otpauth URI)."""
-    import base64
-    import io
-
-    import qrcode
-
-    img = qrcode.make(otpauth_uri)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _escape(text: str) -> str:
@@ -335,11 +321,14 @@ class AppContext:
         self.auth_user: dict[str, Any] | None = None
         self.jobs: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
-        if cloud_client and cloud_client.token:
-            try:
-                me = cloud_client.me()
-                self.auth_user = me.get("user") if isinstance(me, dict) else None
-            except CloudApiError:
+        if cloud_client:
+            if cloud_client.token and is_session_jwt(cloud_client.token):
+                try:
+                    me = cloud_client.me()
+                    self.auth_user = me.get("user") if isinstance(me, dict) else None
+                except CloudApiError:
+                    self.auth_user = None
+            else:
                 self.auth_user = None
 
     @property
@@ -350,13 +339,13 @@ class AppContext:
     def role(self) -> str:
         if self.auth_user and self.auth_user.get("role"):
             return str(self.auth_user["role"])
-        cfg = load_cloud_config()
+        cfg = load_cloud_config(allow_bootstrap_token=False)
         return (cfg.role if cfg else "") or ""
 
     def require_cloud_roles(self, *roles: str) -> tuple[int, bytes, str] | None:
         if not self.cloud_mode:
             return None
-        if not self.cloud or not self.cloud.token or not self.auth_user:
+        if not self.auth_user:
             return _json_bytes({"error": "Sign in required", "auth_required": True}, 401)
         if self.role not in roles:
             return _json_bytes(
@@ -435,12 +424,17 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path == "/api/sites":
-                if ctx.cloud_mode and (
-                    not ctx.cloud or not ctx.cloud.token or not ctx.auth_user
-                ):
+                if ctx.cloud_mode and not ctx.auth_user:
                     self._send(
                         *_json_bytes(
                             {"error": "Sign in required", "auth_required": True}, 401
+                        )
+                    )
+                    return
+                if ctx.cloud_mode and not ctx.cloud:
+                    self._send(
+                        *_json_bytes(
+                            {"error": "Cloud not configured", "auth_required": False}, 401
                         )
                     )
                     return
@@ -539,14 +533,14 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 return
 
             if path == "/api/auth/status":
-                cfg = load_cloud_config()
+                cfg = load_cloud_config(allow_bootstrap_token=False)
                 cloud_mode = ctx.cloud is not None
-                authed = bool(ctx.auth_user and ctx.cloud and ctx.cloud.token)
+                authed = bool(ctx.auth_user) if cloud_mode else True
                 self._send(
                     *_json_bytes(
                         {
                             "cloud_mode": cloud_mode,
-                            "authenticated": authed if cloud_mode else True,
+                            "authenticated": authed,
                             "api_url": (cfg.api_url if cfg else "") or (
                                 ctx.cloud.api_url if ctx.cloud else ""
                             ),
@@ -573,11 +567,6 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 self._send(*_json_bytes(data))
                 return
 
-            if path == "/api/updates/check":
-                info = check_for_update()
-                self._send(*_json_bytes(update_info_dict(info)))
-                return
-
             self._send(*_json_bytes({"error": "Not found"}, 404))
 
         def do_POST(self) -> None:  # noqa: N802
@@ -593,51 +582,20 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 if not ctx.cloud:
                     self._send(*_json_bytes({"error": "Cloud mode is not enabled"}, 400))
                     return
-                username = str(payload.get("username", "")).strip()
+                email = str(payload.get("email") or payload.get("username") or "").strip()
                 password = str(payload.get("password", ""))
                 try:
-                    data = ctx.cloud.login(username, password)
+                    data = ctx.cloud.login(email, password)
                 except CloudApiError as exc:
                     self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 401))
                     return
-                if data.get("status") == "mfa_enrollment_required" and data.get(
-                    "otpauth_uri"
-                ):
-                    data = dict(data)
-                    data["qr_png_base64"] = _otpauth_qr_png_b64(str(data["otpauth_uri"]))
+                if data.get("status") == "ok" and data.get("token"):
+                    self._apply_session(data)
+                    self._send(
+                        *_json_bytes({"status": "ok", "user": data.get("user")})
+                    )
+                    return
                 self._send(*_json_bytes(data))
-                return
-
-            if path == "/api/auth/login/totp":
-                if not ctx.cloud:
-                    self._send(*_json_bytes({"error": "Cloud mode is not enabled"}, 400))
-                    return
-                try:
-                    data = ctx.cloud.login_totp(
-                        str(payload.get("temp_token", "")),
-                        str(payload.get("code", "")).replace(" ", ""),
-                    )
-                except CloudApiError as exc:
-                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 401))
-                    return
-                self._apply_session(data)
-                self._send(*_json_bytes({"status": "ok", "user": data.get("user")}))
-                return
-
-            if path == "/api/auth/mfa/enroll":
-                if not ctx.cloud:
-                    self._send(*_json_bytes({"error": "Cloud mode is not enabled"}, 400))
-                    return
-                try:
-                    data = ctx.cloud.enroll_mfa(
-                        str(payload.get("temp_token", "")),
-                        str(payload.get("code", "")).replace(" ", ""),
-                    )
-                except CloudApiError as exc:
-                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 401))
-                    return
-                self._apply_session(data)
-                self._send(*_json_bytes({"status": "ok", "user": data.get("user")}))
                 return
 
             if path == "/api/auth/logout":
@@ -656,25 +614,10 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 assert ctx.cloud is not None
                 try:
                     data = ctx.cloud.create_user(
-                        str(payload.get("username", "")).strip(),
+                        str(payload.get("email") or payload.get("username") or "").strip(),
                         str(payload.get("password", "")),
                         str(payload.get("role", "operator")),
                     )
-                except CloudApiError as exc:
-                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 400))
-                    return
-                self._send(*_json_bytes(data))
-                return
-
-            if path.endswith("/reset-mfa") and path.startswith("/api/users/"):
-                denied = ctx.require_cloud_roles("admin")
-                if denied:
-                    self._send(*denied)
-                    return
-                assert ctx.cloud is not None
-                user_id = int(path.split("/")[3])
-                try:
-                    data = ctx.cloud.reset_mfa(user_id)
                 except CloudApiError as exc:
                     self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 400))
                     return
@@ -733,28 +676,6 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                     return
                 removed = ctx.websites.delete_all_websites()
                 self._send(*_json_bytes({"ok": True, "removed": removed}))
-                return
-
-            if path == "/api/updates/open":
-                url = str(payload.get("url", "")).strip()
-                if not url.startswith("https://"):
-                    self._send(
-                        *_json_bytes({"error": "Only https download links are allowed"}, 400)
-                    )
-                    return
-                allowed_hosts = (
-                    "github.com",
-                    "objects.githubusercontent.com",
-                    "release-assets.githubusercontent.com",
-                )
-                host = (urlparse(url).hostname or "").lower()
-                if host not in allowed_hosts and not host.endswith(".githubusercontent.com"):
-                    self._send(
-                        *_json_bytes({"error": "Download host is not allowed"}, 400)
-                    )
-                    return
-                webbrowser.open(url)
-                self._send(*_json_bytes({"ok": True}))
                 return
 
             if path == "/api/export-all":

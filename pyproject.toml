@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "website-health-manager"
-version = "0.1.6"
+version = "0.1.7"
 description = "Desktop app to monitor websites, domains, SSL, DNS, and email authentication"
 readme = "README.md"
 license = { text = "MIT" }
@@ -16,8 +16,6 @@ dependencies = [
     "cryptography>=42",
     "python-whois>=0.9",
     "openpyxl>=3.1",
-    "pyotp>=2.9",
-    "qrcode>=8.0",
 ]
 
 [project.optional-dependencies]

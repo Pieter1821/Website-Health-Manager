@@ -62,8 +62,10 @@ def load_cloud_config(*, allow_bootstrap_token: bool = True) -> Optional[CloudCo
       1) WHM_API_URL (+ optional WHM_API_TOKEN) env vars
       2) ~/.whm/cloud.json
 
-    When allow_bootstrap_token is False (desktop app), only JWT session tokens
-    are accepted so a shared WHM_API_TOKEN in cloud.json cannot bypass MFA.
+    Bootstrap / shared API tokens (non-JWT ``api_token``) are accepted only when
+    ``allow_bootstrap_token`` is True (migrate / admin scripts). The desktop app
+    must pass ``allow_bootstrap_token=False`` so a shared WHM_API_TOKEN in
+    cloud.json cannot bypass email/password login.
     """
     env_url = (os.environ.get("WHM_API_URL") or "").strip().rstrip("/")
     env_token = (os.environ.get("WHM_API_TOKEN") or "").strip()
@@ -85,8 +87,9 @@ def load_cloud_config(*, allow_bootstrap_token: bool = True) -> Optional[CloudCo
         return None
     session = str(data.get("session_token") or "").strip()
     legacy = str(data.get("api_token") or "").strip()
+    expires_at = str(data.get("session_expires_at") or "").strip()
     token = ""
-    if is_session_jwt(session):
+    if is_session_jwt(session) and _session_not_expired(expires_at):
         token = session
     elif is_session_jwt(legacy):
         token = legacy
@@ -96,9 +99,19 @@ def load_cloud_config(*, allow_bootstrap_token: bool = True) -> Optional[CloudCo
         api_url=url,
         api_token=token,
         username=str(data.get("username") or "").strip(),
-        session_expires_at=str(data.get("session_expires_at") or "").strip(),
+        session_expires_at=expires_at,
         role=str(data.get("role") or "").strip(),
     )
+
+
+def _session_not_expired(expires_at: str) -> bool:
+    if not expires_at:
+        return True
+    try:
+        exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return exp > datetime.now(timezone.utc)
 
 
 def save_cloud_config(

@@ -44,12 +44,14 @@ Paste a site (or import a list), press **Check**, and see whether the website op
 
 ### Recommended install
 
-1. Download **[WebsiteHealthManager-Setup-0.1.6.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.6/WebsiteHealthManager-Setup-0.1.6.exe)** from the [latest release](https://github.com/Pieter1821/Website-Health-Manager/releases/latest).
+1. Download **[WebsiteHealthManager-Setup-0.1.7.exe](https://github.com/Pieter1821/Website-Health-Manager/releases/download/v0.1.7/WebsiteHealthManager-Setup-0.1.7.exe)** from the [latest release](https://github.com/Pieter1821/Website-Health-Manager/releases/latest).
 2. Double-click the setup → **Next** → **Install**.
 3. Open **Website Health Manager** from the Start menu or desktop shortcut.
 4. Chrome opens the WHM window.
 5. Type a website (example: `mybusiness.co.za`) → **Check**.
 6. Click a row → **Problems & fixes**. Export with **Excel** / **CSV**, or **Export all** for every site (saved to Downloads).
+
+**Upgrading:** run a newer `WebsiteHealthManager-Setup-*.exe` over the existing install — no uninstall needed. If the app is open, Setup will offer to close it (and can force-close if needed). Your data under `%USERPROFILE%\.whm\` is left alone.
 
 No Python is required. By default your data stays on this PC under `%USERPROFILE%\.whm\`. Optional shared cloud storage (Cloudflare D1) is documented in [`docs/cloudflare-d1.md`](docs/cloudflare-d1.md).
 
@@ -124,8 +126,6 @@ python -m whm
 ```
 
 Leave the terminal open; stop with `Ctrl+C`. Tk fallback: `python -m whm --tk`.
-
-The app can check GitHub Releases for a newer installer (**Updates** in the top bar, and a quiet check shortly after launch).
 
 ### Tests
 

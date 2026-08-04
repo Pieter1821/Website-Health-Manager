@@ -2,30 +2,21 @@
 
 Website Health Manager stays a **desktop app**. Cloudflare is only private remote storage: the installed app on each PC calls a locked-down HTTPS API and reads/writes the shared SQLite (D1) database.
 
-This is **not** a public website. Access requires the desktop client header plus a signed-in user (username / password / TOTP) or the bootstrap API token for setup scripts.
+**Access model:** email/password sign-in → 30-day session JWT. The desktop client header (`X-WHM-Client: desktop`) is required; random clients get a blank 404. Bootstrap `WHM_API_TOKEN` is for migrate / one-time admin creation only — **never** put it in desktop `cloud.json`.
 
 Local SQLite (`%USERPROFILE%\.whm\whm.db`) remains the default. Cloud mode is opt-in via `%USERPROFILE%\.whm\cloud.json`.
 
 ## What you get
 
 - One shared database for every desktop install that points at the same API
-- **Authentication:** username + password + authenticator (TOTP / Google Authenticator)
-- **Authorization:** roles `admin` / `operator` / `viewer`
+- **Authentication:** email or legacy username (e.g. `admin`) + password → session JWT (no MFA)
 - SMTP passwords and alert webhooks stay on each PC (never synced to D1)
 
 ## What stays on each PC
 
 - Health **scans** still run in the desktop app (from that machine)
 - Alert credentials (SMTP / Slack / Teams / Discord / generic webhooks)
-- Results are saved to D1 so colleagues see the same history after they sign in
-
-## Roles
-
-| Role | Can do |
-|------|--------|
-| `viewer` | Read sites, checks, export |
-| `operator` | Also add/check/import sites |
-| `admin` | Also delete, clear-all, cloud settings, manage users / reset MFA |
+- Results are saved to D1 so other PCs see the same list
 
 ---
 
@@ -49,33 +40,28 @@ Paste the printed `database_id` into your **local** `wrangler.toml` (never commi
 ```powershell
 npm run db:migrate:remote
 npm run db:migrate:users:remote
-npx wrangler secret put WHM_API_TOKEN      # bootstrap / migrate only
-npx wrangler secret put WHM_JWT_SECRET     # required for login sessions
+npx wrangler secret put WHM_API_TOKEN      # bootstrap / migrate only (keep secret)
+npx wrangler secret put WHM_JWT_SECRET     # signs desktop session JWTs (required for login)
 npm run deploy
-```
-
-Note the API URL from deploy output.
-
-Optional: secret `WHM_ALLOWED_IPS` = comma-separated client IPs.
-
-Smoke test (bootstrap token still works as admin for scripts):
-
-```powershell
-curl -H "Authorization: Bearer YOUR_BOOTSTRAP_TOKEN" -H "X-WHM-Client: desktop" https://whm-api.xxx.workers.dev/api/health
 ```
 
 ## 3. Migrate local data → D1 (one-shot)
 
+Run this on the PC that has the websites you want in the cloud (usually your work laptop):
+
 ```powershell
 python -m whm.migrate_to_cloud --api-url https://whm-api.xxx.workers.dev --token YOUR_BOOTSTRAP_TOKEN --dry-run
-python -m whm.migrate_to_cloud --api-url https://whm-api.xxx.workers.dev --token YOUR_BOOTSTRAP_TOKEN --yes --save-config --bootstrap-user admin --bootstrap-password "a-long-password"
+python -m whm.migrate_to_cloud --api-url https://whm-api.xxx.workers.dev --token YOUR_BOOTSTRAP_TOKEN --yes --save-config --bootstrap-user admin --bootstrap-password "your-long-password"
 ```
 
-Local DB is left untouched. Secret settings are **not** uploaded. `--bootstrap-user` creates the first admin when the users table is empty.
+`--save-config` writes **api_url only** to `cloud.json` (never the bootstrap token).  
+`--bootstrap-user` creates the first admin when the users table is empty.  
+Local DB is left untouched. Secret settings are **not** uploaded.  
+**Warning:** migrate **replaces** all cloud site data with this PC’s local DB.
 
-## 4. Sign in from the desktop app
+## 4. Point each desktop at the Worker
 
-`%USERPROFILE%\.whm\cloud.json` only needs the API URL (session JWT is written after login):
+`%USERPROFILE%\.whm\cloud.json` on **every** PC:
 
 ```json
 {
@@ -83,17 +69,15 @@ Local DB is left untouched. Secret settings are **not** uploaded. `--bootstrap-u
 }
 ```
 
-1. Open Website Health Manager.
-2. Sign in with username + password.
-3. On first login, scan the QR with an authenticator app and confirm the 6-digit code ([TOTP / PyOTP-compatible](https://pyauth.github.io/pyotp/)).
-4. Admins can open **Users** to create operators/viewers or reset MFA.
+Open the app → sign in with email/password (or legacy username `admin`). After login, the file gains `session_token` / `session_expires_at` (30-day TTL). Sessions work across PCs — sign in once per machine.
 
 Force local storage: `$env:WHM_STORAGE = "local"`.
 
-## Recovery
+### Forgot admin password?
 
-- Lost authenticator: an **admin** uses **Users → Reset MFA** for that account; next login re-enrolls.
-- Lost admin access: use `WHM_API_TOKEN` with `POST /api/auth/bootstrap` only if the users table is empty, or reset MFA / create users via a remaining admin session.
+1. If the users table is empty: re-run migrate with `--bootstrap-user` / `--bootstrap-password` (bootstrap token via `--token` or env — not cloud.json).
+2. If another admin exists: they can reset the password from **Users** in the desktop app.
+3. If you are locked out with an existing `admin` user: use Wrangler D1 to delete that row, then bootstrap again; or hash a new password offline and `UPDATE` the `password_hash` (same PBKDF2 format the Worker uses).
 
 ## Project files
 

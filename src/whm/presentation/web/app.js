@@ -19,7 +19,7 @@ const state = {
   role: "admin",
   username: "",
   authTempToken: "",
-  authFlow: "password", // password | mfa | enroll
+  authFlow: "password",
 };
 
 const el = {
@@ -143,18 +143,26 @@ function applyAuthUi() {
   const usersBtn = document.getElementById("users-btn");
   const signout = document.getElementById("signout-btn");
   if (chip) {
-    if (state.cloudMode && state.authenticated && state.username) {
-      chip.textContent = `${state.username} · ${state.role}`;
+    if (state.cloudMode && state.authenticated) {
+      chip.textContent = state.username
+        ? `${state.username} · ${state.role || "user"}`
+        : "Signed in";
       chip.classList.remove("hidden");
     } else {
       chip.classList.add("hidden");
     }
   }
   if (usersBtn) {
-    usersBtn.classList.toggle("hidden", !(state.cloudMode && state.role === "admin" && state.authenticated));
+    usersBtn.classList.toggle(
+      "hidden",
+      !(state.cloudMode && state.authenticated && state.role === "admin")
+    );
   }
   if (signout) {
-    signout.classList.toggle("hidden", !state.cloudMode);
+    signout.classList.toggle(
+      "hidden",
+      !(state.cloudMode && state.authenticated)
+    );
   }
 }
 
@@ -163,33 +171,17 @@ function showLoginStep(step) {
   document.querySelectorAll("#login-gate .login-step").forEach((node) => {
     node.classList.toggle("hidden", node.dataset.step !== step);
   });
-  const title = document.getElementById("login-title");
-  const subtitle = document.getElementById("login-subtitle");
-  if (title && subtitle) {
-    if (step === "password") {
-      title.textContent = "Sign in to continue";
-      subtitle.textContent =
-        "Use your WHM username and password. We’ll ask for an authenticator code next.";
-    } else if (step === "mfa") {
-      title.textContent = "Authenticator code";
-      subtitle.textContent = "Almost done — enter the code from your authenticator app.";
-    } else if (step === "enroll") {
-      title.textContent = "Set up authenticator";
-      subtitle.textContent = "One-time setup so only you can sign in to this cloud account.";
-    }
-  }
 }
 
 function showLoginGate() {
-  const gate = document.getElementById("login-gate");
-  if (!gate) return;
-  gate.classList.remove("hidden");
-  showLoginStep("password");
-  const err = document.getElementById("login-error");
-  if (err) {
-    err.classList.add("hidden");
-    err.textContent = "";
+  if (!state.cloudMode) {
+    hideLoginGate();
+    return;
   }
+  document.getElementById("login-gate")?.classList.remove("hidden");
+  showLoginStep("password");
+  setLoginError("");
+  document.getElementById("login-email")?.focus();
 }
 
 function hideLoginGate() {
@@ -925,54 +917,6 @@ function bindTabs() {
   });
 }
 
-async function openUpdateDownload(url) {
-  if (!url) return;
-  try {
-    await api("/api/updates/open", {
-      method: "POST",
-      body: JSON.stringify({ url }),
-    });
-  } catch (err) {
-    // Fallback: try the browser directly.
-    try {
-      window.open(url, "_blank", "noopener,noreferrer");
-    } catch (_) {
-      toast(err.message || "Couldn’t open the download", { type: "error" });
-    }
-  }
-}
-
-async function offerUpdate(info, { quiet = false } = {}) {
-  if (!info || !info.update_available) {
-    if (!quiet) {
-      const ver = info?.current_version || "";
-      toast(
-        info?.error
-          ? `Couldn’t check for updates (${info.error})`
-          : `You’re on the latest version${ver ? ` (${ver})` : ""}`,
-        { type: info?.error ? "warn" : "ok", duration: 4200 }
-      );
-    }
-    return;
-  }
-  const latest = info.latest_version || "newer";
-  const current = info.current_version || "this build";
-  const ok = await askConfirm({
-    title: "Update available",
-    message: `Version ${latest} is available (you have ${current}).\n\nOpen the Windows setup download?`,
-    confirmLabel: "Download update",
-    cancelLabel: quiet ? "Later" : "Not now",
-    danger: false,
-  });
-  if (ok) {
-    await openUpdateDownload(info.download_url || info.release_url);
-    toast("Download opened — install when it finishes, then restart WHM", {
-      type: "ok",
-      duration: 5200,
-    });
-  }
-}
-
 async function showImportResult(result) {
   const added = result.added_count ?? (result.added || []).length;
   const summary = result.summary || "Import finished";
@@ -1003,26 +947,6 @@ async function showImportResult(result) {
   });
   if (added > 0) {
     toast(summary, { type: "warn", duration: 4200 });
-  }
-}
-
-async function checkForUpdates({ quiet = false } = {}) {
-  try {
-    if (!quiet) {
-      setStatus("Checking for updates…");
-      showLoader("Checking GitHub for updates…");
-    }
-    const info = await api("/api/updates/check");
-    await offerUpdate(info, { quiet });
-  } catch (err) {
-    if (!quiet) {
-      toast(err.message || "Couldn’t check for updates", { type: "error" });
-    }
-  } finally {
-    if (!quiet && !state.scanning) {
-      hideLoader();
-      setStatus("");
-    }
   }
 }
 
@@ -1203,10 +1127,6 @@ function bind() {
   });
   document.getElementById("help-close").addEventListener("click", closeHelp);
   document.getElementById("help-ok").addEventListener("click", closeHelp);
-  const updateBtn = document.getElementById("update-btn");
-  if (updateBtn) {
-    updateBtn.addEventListener("click", () => checkForUpdates({ quiet: false }));
-  }
   document.getElementById("back-btn").addEventListener("click", backToList);
   document.getElementById("settings-btn").addEventListener("click", openSettings);
   document.getElementById("settings-close").addEventListener("click", () => closeModal(el.settingsModal));
@@ -1272,45 +1192,22 @@ function bindAuth() {
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
     setLoginError("");
-    const username = document.getElementById("login-username")?.value?.trim() || "";
+    const email =
+      document.getElementById("login-email")?.value?.trim() ||
+      document.getElementById("login-username")?.value?.trim() ||
+      "";
     const password = document.getElementById("login-password")?.value || "";
     try {
       const data = await api("/api/auth/login", {
         method: "POST",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ email, username: email, password }),
       });
-      state.authTempToken = data.temp_token || "";
-      if (data.status === "mfa_enrollment_required") {
-        const qr = document.getElementById("login-qr");
-        const secret = document.getElementById("login-secret");
-        if (qr && data.qr_png_base64) {
-          qr.src = `data:image/png;base64,${data.qr_png_base64}`;
-        }
-        if (secret) secret.textContent = data.totp_secret || "";
-        showLoginStep("enroll");
+      if (data.status !== "ok" || !data.user) {
+        setLoginError(data.error || "Sign-in failed");
         return;
       }
-      if (data.status === "mfa_required") {
-        showLoginStep("mfa");
-        document.getElementById("login-totp")?.focus();
-        return;
-      }
-      setLoginError("Unexpected login response");
-    } catch (err) {
-      setLoginError(err.message || "Sign-in failed");
-    }
-  });
-
-  document.getElementById("login-totp-btn")?.addEventListener("click", async () => {
-    setLoginError("");
-    const code = (document.getElementById("login-totp")?.value || "").replace(/\s/g, "");
-    try {
-      const data = await api("/api/auth/login/totp", {
-        method: "POST",
-        body: JSON.stringify({ temp_token: state.authTempToken, code }),
-      });
       state.authenticated = true;
-      state.username = data.user?.username || "";
+      state.username = data.user?.username || email;
       state.role = data.user?.role || "";
       hideLoginGate();
       applyAuthUi();
@@ -1319,29 +1216,7 @@ function bindAuth() {
       hideLoader();
       toast(`Signed in as ${state.username}`, { type: "ok" });
     } catch (err) {
-      setLoginError(err.message || "Invalid code");
-    }
-  });
-
-  document.getElementById("login-enroll-btn")?.addEventListener("click", async () => {
-    setLoginError("");
-    const code = (document.getElementById("login-enroll-totp")?.value || "").replace(/\s/g, "");
-    try {
-      const data = await api("/api/auth/mfa/enroll", {
-        method: "POST",
-        body: JSON.stringify({ temp_token: state.authTempToken, code }),
-      });
-      state.authenticated = true;
-      state.username = data.user?.username || "";
-      state.role = data.user?.role || "";
-      hideLoginGate();
-      applyAuthUi();
-      showLoader("Loading websites…");
-      await loadSites();
-      hideLoader();
-      toast("Authenticator enabled — signed in", { type: "ok" });
-    } catch (err) {
-      setLoginError(err.message || "Couldn’t enable authenticator");
+      setLoginError(err.message || "Sign-in failed");
     }
   });
 
@@ -1367,10 +1242,12 @@ function bindAuth() {
   document.getElementById("users-create-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
+      const email = document.getElementById("new-username").value.trim();
       await api("/api/users", {
         method: "POST",
         body: JSON.stringify({
-          username: document.getElementById("new-username").value.trim(),
+          email,
+          username: email,
           password: document.getElementById("new-password").value,
           role: document.getElementById("new-role").value,
         }),
@@ -1393,11 +1270,9 @@ async function renderUsersList() {
     .map(
       (u) => `
     <tr>
-      <td>${escapeHtml(u.username)}${u.disabled ? " (disabled)" : ""}</td>
+      <td>${escapeHtml(u.email || u.username)}${u.disabled ? " (disabled)" : ""}</td>
       <td>${escapeHtml(u.role)}</td>
-      <td>${u.totp_enabled ? "On" : "Off"}</td>
       <td>
-        <button type="button" class="btn-ghost" data-reset-mfa="${u.id}">Reset MFA</button>
         <button type="button" class="btn-ghost" data-toggle-user="${u.id}" data-disabled="${u.disabled ? "0" : "1"}">
           ${u.disabled ? "Enable" : "Disable"}
         </button>
@@ -1405,20 +1280,6 @@ async function renderUsersList() {
     </tr>`
     )
     .join("");
-  tbody.querySelectorAll("[data-reset-mfa]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      try {
-        await api(`/api/users/${btn.dataset.resetMfa}/reset-mfa`, {
-          method: "POST",
-          body: "{}",
-        });
-        await renderUsersList();
-        toast("MFA reset — user must re-enroll", { type: "ok" });
-      } catch (err) {
-        toast(err.message || "Reset failed", { type: "error" });
-      }
-    });
-  });
   tbody.querySelectorAll("[data-toggle-user]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       try {
@@ -1451,13 +1312,13 @@ refreshAuthStatus()
     if (status.cloud_mode && !status.authenticated) {
       hideLoader();
       showLoginGate();
+      setStatus("Sign in to open the shared cloud list");
       return;
     }
     showLoader("Loading websites…");
     await loadSites();
     setStatus("");
     hideLoader();
-    setTimeout(() => checkForUpdates({ quiet: true }), 1500);
   })
   .catch((err) => {
     setStatus("Couldn’t start");

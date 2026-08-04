@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from whm.application.scheduler import SchedulerService
 from whm.application.services import HealthScanService, SettingsService, WebsiteService
@@ -27,6 +28,22 @@ from whm.infrastructure.repositories import (
     SqliteSettingsRepository,
     SqliteWebsiteRepository,
 )
+
+# Kept alive for process lifetime so Inno Setup AppMutex can detect a running instance.
+_APP_MUTEX: Any = None
+_APP_MUTEX_NAME = "WebsiteHealthManagerSingleInstance"
+
+
+def _acquire_app_mutex() -> None:
+    """Create a named Windows mutex matching packaging/whm-setup.iss AppMutex."""
+    global _APP_MUTEX
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, _APP_MUTEX_NAME)
+    if handle:
+        _APP_MUTEX = handle
 
 
 def setup_logging() -> None:
@@ -54,7 +71,7 @@ def build_services(db_path: Path | None = None):
     via the Worker API. SMTP/webhook secrets always stay in local SQLite.
     Otherwise use local SQLite under ~/.whm/whm.db.
     """
-    # Desktop: only JWT sessions — never treat WHM_API_TOKEN as a logged-in user.
+    # Desktop rejects shared WHM_API_TOKEN — sign in with email/password for a session JWT.
     cloud = load_cloud_config(allow_bootstrap_token=False)
     force_local = (os.environ.get("WHM_STORAGE") or "").strip().lower() in {
         "local",
@@ -98,6 +115,7 @@ def build_services(db_path: Path | None = None):
 
 def main() -> None:
     setup_logging()
+    _acquire_app_mutex()
     logging.getLogger(__name__).info("Starting Website Health Manager")
     website_service, scan_service, settings_service, _conn, cloud_client = build_services()
     scheduler = SchedulerService(website_service, scan_service, settings_service)
