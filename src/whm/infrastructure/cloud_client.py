@@ -100,6 +100,14 @@ class CloudApiClient:
             auth=False,
         )
 
+    def register(self, email: str, password: str) -> dict[str, Any]:
+        identity = (email or "").strip()
+        return self.post(
+            "/api/auth/register",
+            {"email": identity, "username": identity, "password": password},
+            auth=False,
+        )
+
     def bootstrap_admin(self, bootstrap_token: str, email: str, password: str) -> dict[str, Any]:
         previous = self._token
         self._token = bootstrap_token

@@ -69,7 +69,8 @@ Local DB is left untouched. Secret settings are **not** uploaded.
 }
 ```
 
-Open the app → sign in with email/password (or legacy username `admin`). After login, the file gains `session_token` / `session_expires_at` (30-day TTL). Sessions work across PCs — sign in once per machine.
+Open the app → **Sign in** with email/password (or legacy username `admin`), or use **Register** to create an account.  
+Registration rules: password at least 10 characters; the **first** registered user becomes `admin`, later self-serve accounts are `operators` (admins can still create users from the Users panel). After login or register, `cloud.json` gains `session_token` / `session_expires_at` (30-day TTL). Sessions work across PCs — sign in once per machine.
 
 Force local storage: `$env:WHM_STORAGE = "local"`.
 

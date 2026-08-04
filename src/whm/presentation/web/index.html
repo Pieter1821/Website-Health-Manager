@@ -103,7 +103,23 @@
               placeholder="Your password"
               required
             />
+            <div class="login-confirm-wrap hidden" id="login-confirm-wrap">
+              <label for="login-password-confirm">Confirm password</label>
+              <input
+                id="login-password-confirm"
+                name="password_confirm"
+                type="password"
+                autocomplete="new-password"
+                maxlength="200"
+                placeholder="Re-enter password"
+              />
+            </div>
             <button type="submit" class="btn-primary" id="login-next-btn">Sign in</button>
+            <p class="login-switch">
+              <button type="button" class="login-switch-btn" id="login-mode-toggle">
+                Need an account? Register
+              </button>
+            </p>
           </div>
           <p class="error-text hidden" id="login-error" role="alert"></p>
         </form>

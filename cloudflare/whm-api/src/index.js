@@ -69,7 +69,11 @@ function methodPath(method, path) {
 }
 
 function isPublicAuthPath(key) {
-  return key === "POST /api/auth/bootstrap" || key === "POST /api/auth/login";
+  return (
+    key === "POST /api/auth/bootstrap" ||
+    key === "POST /api/auth/login" ||
+    key === "POST /api/auth/register"
+  );
 }
 
 function isDesktopClient(request) {
@@ -196,6 +200,55 @@ async function routeAuth(request, env, path) {
       expires_in: SESSION_TTL_SECONDS,
       user: publicUser(user),
     });
+  }
+
+  if (method === "POST" && path === "/api/auth/register") {
+    const body = await readJson(request);
+    const username = normalizeLoginId(body?.email || body?.username);
+    const password = String(body?.password || "");
+    if (!username) {
+      return json({ error: "Enter a valid email address" }, 400);
+    }
+    if (password.length < 10 || password.length > 200) {
+      return json({ error: "password must be 10–200 characters" }, 400);
+    }
+    const rlKey = `register:${clientIp(request)}:${username}`;
+    if (rateLimited(rlKey)) {
+      return json({ error: "Too many attempts — try again later" }, 429);
+    }
+    const countRow = await db.prepare("SELECT COUNT(*) AS n FROM users").first();
+    const role = Number(countRow?.n || 0) === 0 ? "admin" : "operator";
+    const now = new Date().toISOString();
+    try {
+      const r = await db
+        .prepare(
+          `INSERT INTO users
+           (username, password_hash, role, totp_secret, totp_enabled, disabled, created_at, updated_at)
+           VALUES (?, ?, ?, NULL, 0, 0, ?, ?)`
+        )
+        .bind(username, await hashPassword(password), role, now, now)
+        .run();
+      const user = await db
+        .prepare("SELECT * FROM users WHERE id = ?")
+        .bind(r.meta.last_row_id)
+        .first();
+      if (!user) {
+        return json({ error: "Registration failed" }, 500);
+      }
+      clearRateLimit(rlKey);
+      const token = await issueSessionJwt(user, jwtSecret);
+      return json(
+        {
+          status: "ok",
+          token,
+          expires_in: SESSION_TTL_SECONDS,
+          user: publicUser(user),
+        },
+        201
+      );
+    } catch {
+      return json({ error: "Email already exists" }, 409);
+    }
   }
 
   return notFound();

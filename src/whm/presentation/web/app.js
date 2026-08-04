@@ -20,6 +20,7 @@ const state = {
   username: "",
   authTempToken: "",
   authFlow: "password",
+  loginMode: "signin",
 };
 
 const el = {
@@ -180,12 +181,49 @@ function showLoginGate() {
   }
   document.getElementById("login-gate")?.classList.remove("hidden");
   showLoginStep("password");
+  setLoginMode("signin");
   setLoginError("");
   document.getElementById("login-email")?.focus();
 }
 
 function hideLoginGate() {
   document.getElementById("login-gate")?.classList.add("hidden");
+}
+
+function setLoginMode(mode) {
+  state.loginMode = mode === "register" ? "register" : "signin";
+  const isRegister = state.loginMode === "register";
+  const title = document.getElementById("login-title");
+  const subtitle = document.getElementById("login-subtitle");
+  const submit = document.getElementById("login-next-btn");
+  const toggle = document.getElementById("login-mode-toggle");
+  const confirmWrap = document.getElementById("login-confirm-wrap");
+  const confirmInput = document.getElementById("login-password-confirm");
+  const passwordInput = document.getElementById("login-password");
+  if (title) title.textContent = isRegister ? "Create your account" : "Sign in to continue";
+  if (subtitle) {
+    subtitle.textContent = isRegister
+      ? "Choose an email and password (at least 10 characters). The first account becomes admin."
+      : "Enter your email (or username) and password to open the shared cloud list.";
+  }
+  if (submit) submit.textContent = isRegister ? "Register" : "Sign in";
+  if (toggle) {
+    toggle.textContent = isRegister
+      ? "Already have an account? Sign in"
+      : "Need an account? Register";
+  }
+  confirmWrap?.classList.toggle("hidden", !isRegister);
+  if (confirmInput) {
+    confirmInput.required = isRegister;
+    if (!isRegister) confirmInput.value = "";
+  }
+  if (passwordInput) {
+    passwordInput.autocomplete = isRegister ? "new-password" : "current-password";
+    passwordInput.placeholder = isRegister ? "At least 10 characters" : "Your password";
+    if (isRegister) passwordInput.minLength = 10;
+    else passwordInput.removeAttribute("minLength");
+  }
+  setLoginError("");
 }
 
 function setLoginError(message) {
@@ -1261,6 +1299,10 @@ function bind() {
 
 function bindAuth() {
   const form = document.getElementById("login-form");
+  document.getElementById("login-mode-toggle")?.addEventListener("click", () => {
+    setLoginMode(state.loginMode === "register" ? "signin" : "register");
+    document.getElementById("login-email")?.focus();
+  });
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
     setLoginError("");
@@ -1269,13 +1311,26 @@ function bindAuth() {
       document.getElementById("login-username")?.value?.trim() ||
       "";
     const password = document.getElementById("login-password")?.value || "";
+    const isRegister = state.loginMode === "register";
+    if (isRegister) {
+      const confirm = document.getElementById("login-password-confirm")?.value || "";
+      if (password.length < 10) {
+        setLoginError("Password must be at least 10 characters");
+        return;
+      }
+      if (password !== confirm) {
+        setLoginError("Passwords do not match");
+        return;
+      }
+    }
     try {
-      const data = await api("/api/auth/login", {
+      const path = isRegister ? "/api/auth/register" : "/api/auth/login";
+      const data = await api(path, {
         method: "POST",
         body: JSON.stringify({ email, username: email, password }),
       });
       if (data.status !== "ok" || !data.user) {
-        setLoginError(data.error || "Sign-in failed");
+        setLoginError(data.error || (isRegister ? "Registration failed" : "Sign-in failed"));
         return;
       }
       state.authenticated = true;
@@ -1286,9 +1341,14 @@ function bindAuth() {
       showLoader("Loading websites…");
       await loadSites();
       hideLoader();
-      toast(`Signed in as ${state.username}`, { type: "ok" });
+      toast(
+        isRegister
+          ? `Account created — signed in as ${state.username}`
+          : `Signed in as ${state.username}`,
+        { type: "ok" }
+      );
     } catch (err) {
-      setLoginError(err.message || "Sign-in failed");
+      setLoginError(err.message || (isRegister ? "Registration failed" : "Sign-in failed"));
     }
   });
 

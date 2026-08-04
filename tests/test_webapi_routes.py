@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -289,3 +289,58 @@ def test_export_requires_check_then_saves(api_server, tmp_path, monkeypatch):
     assert status == 200
     assert body["ok"] is True
     assert body["format"] == "csv"
+
+
+def test_auth_register_without_cloud(api_server):
+    base, *_ = api_server
+    status, body = _request(
+        base,
+        "POST",
+        "/api/auth/register",
+        {"email": "a@example.com", "password": "longenough1"},
+    )
+    assert status == 400
+    assert "cloud" in body["error"].lower()
+
+
+def test_auth_register_applies_session(api_server, monkeypatch, tmp_path):
+    base, ctx, *_ = api_server
+    cloud = MagicMock()
+    cloud.api_url = "https://example.workers.dev"
+    cloud.register.return_value = {
+        "status": "ok",
+        "token": "aaa.bbb.ccc",
+        "expires_in": 3600,
+        "user": {"id": 1, "username": "a@example.com", "email": "a@example.com", "role": "admin"},
+    }
+    cloud.set_token = MagicMock()
+    ctx.cloud = cloud
+    save_mock = MagicMock()
+    monkeypatch.setattr("whm.presentation.webapi.save_cloud_config", save_mock)
+    status, body = _request(
+        base,
+        "POST",
+        "/api/auth/register",
+        {"email": "a@example.com", "password": "longenough1"},
+    )
+    assert status == 201
+    assert body["status"] == "ok"
+    assert body["user"]["role"] == "admin"
+    cloud.register.assert_called_once_with("a@example.com", "longenough1")
+    cloud.set_token.assert_called_once_with("aaa.bbb.ccc")
+    assert ctx.auth_user["username"] == "a@example.com"
+    save_mock.assert_called_once()
+
+
+def test_auth_register_rejects_short_password(api_server):
+    base, ctx, *_ = api_server
+    ctx.cloud = MagicMock()
+    status, body = _request(
+        base,
+        "POST",
+        "/api/auth/register",
+        {"email": "a@example.com", "password": "short"},
+    )
+    assert status == 400
+    assert "10" in body["error"]
+    ctx.cloud.register.assert_not_called()

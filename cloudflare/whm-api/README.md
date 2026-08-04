@@ -19,5 +19,6 @@ npm run deploy
 The deployed API is **private**:
 
 - Requests without `X-WHM-Client: desktop` get a blank 404
-- Data routes require a valid **session JWT** (from `POST /api/auth/login`) or the bootstrap `WHM_API_TOKEN` (migrate / scripts only)
-- Desktop apps use `cloud.json` with `api_url` only, then sign in with email/password — do **not** put `WHM_API_TOKEN` in desktop config
+- Data routes require a valid **session JWT** (from `POST /api/auth/login` or `POST /api/auth/register`) or the bootstrap `WHM_API_TOKEN` (migrate / scripts only)
+- Desktop apps use `cloud.json` with `api_url` only, then sign in or register with email/password — do **not** put `WHM_API_TOKEN` in desktop config
+- Self-service register: first account → `admin`, later accounts → `operator`; duplicate email → 409

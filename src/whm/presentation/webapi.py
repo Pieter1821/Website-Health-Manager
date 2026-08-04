@@ -605,6 +605,34 @@ def make_handler(ctx: AppContext) -> type[BaseHTTPRequestHandler]:
                 self._send(*_json_bytes(data))
                 return
 
+            if path == "/api/auth/register":
+                if not ctx.cloud:
+                    self._send(*_json_bytes({"error": "Cloud mode is not enabled"}, 400))
+                    return
+                email = str(payload.get("email") or payload.get("username") or "").strip()
+                password = str(payload.get("password", ""))
+                if len(password) < 10:
+                    self._send(
+                        *_json_bytes(
+                            {"error": "password must be at least 10 characters"},
+                            400,
+                        )
+                    )
+                    return
+                try:
+                    data = ctx.cloud.register(email, password)
+                except CloudApiError as exc:
+                    self._send(*_json_bytes({"error": str(exc)}, exc.status_code or 400))
+                    return
+                if data.get("status") == "ok" and data.get("token"):
+                    self._apply_session(data)
+                    self._send(
+                        *_json_bytes({"status": "ok", "user": data.get("user")}, 201)
+                    )
+                    return
+                self._send(*_json_bytes(data))
+                return
+
             if path == "/api/auth/logout":
                 if ctx.cloud:
                     ctx.cloud.set_token("")
